@@ -330,6 +330,7 @@ body {
 }
 
 .msg.user { background: var(--bg); }
+.msg.user .msg-attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; max-width: 85%; }
 .msg.user .msg-body { background: var(--user-bubble); border-radius: 18px; padding: 10px 16px; display: inline-block; max-width: 85%; }
 
 .msg.assistant .msg-body { padding: 0; }
@@ -357,13 +358,11 @@ body {
 .msg.assistant .msg-body.md pre:hover .md-code-copy { opacity: 1; }
 .md-code-copy:hover { background: var(--hover); color: var(--text); }
 .msg.system .msg-body { font-size: 12px; color: var(--text-dim); font-style: italic; }
-.msg-attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
-.msg-attachments + .msg-text { margin-top: 4px; }
-.att-card { display: inline-flex; align-items: center; gap: 6px; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 6px 10px; font-size: 13px; color: var(--text-dim); max-width: 220px; overflow: hidden; }
-.att-card .att-icon { font-size: 16px; flex-shrink: 0; }
-.att-card .att-info { min-width: 0; }
-.att-card .att-name { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); font-weight: 500; }
-.att-card .att-size { font-size: 11px; color: var(--text-dim); }
+.att-card { display: inline-flex; align-items: center; gap: 8px; background: var(--user-bubble); border-radius: 12px; padding: 8px 12px; max-width: 260px; overflow: hidden; }
+.att-card .att-icon { font-size: 20px; flex-shrink: 0; width: 32px; height: 32px; background: var(--bg); border-radius: 8px; display: flex; align-items: center; justify-content: center; }
+.att-card .att-info { min-width: 0; flex: 1; }
+.att-card .att-name { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); font-weight: 500; font-size: 13px; }
+.att-card .att-size { display: block; font-size: 11px; color: var(--text-dim); margin-top: 1px; }
 
 .msg.streaming .msg-body::after {
   content: '';
@@ -1647,14 +1646,14 @@ function renderMessages() {
 function _appendMsg(container, role, text, files) {
   const div = document.createElement('div');
   div.className = 'msg ' + role;
-  let bodyHtml = '';
+  let inner = '';
   if (role === 'user') {
-    if (files && files.length) bodyHtml += _renderAttachments(files);
-    bodyHtml += (text ? `<div class="msg-text">${esc(text)}</div>` : '');
+    if (files && files.length) inner += _renderAttachments(files);
+    if (text) inner += `<div class="msg-body">${esc(text)}</div>`;
   } else {
-    bodyHtml = renderMd(text);
+    inner = `<div class="msg-body md">${renderMd(text)}</div>`;
   }
-  div.innerHTML = `<div class="msg-label">${role === 'user' ? 'You' : 'Hermes'}</div><div class="msg-body${role === 'assistant' ? ' md' : ''}">${bodyHtml}</div>`;
+  div.innerHTML = `<div class="msg-label">${role === 'user' ? 'You' : 'Hermes'}</div>${inner}`;
   container.appendChild(div);
   if (role === 'assistant') addCodeCopyBtns(div);
 }
@@ -1771,10 +1770,10 @@ function hideEmpty() { const e = $('emptyState'); if (e) e.style.display = 'none
 function addUserMsg(text, files) {
   hideEmpty();
   const div = document.createElement('div'); div.className = 'msg user';
-  let body = '';
-  if (files && files.length) body += _renderAttachments(files);
-  if (text) body += `<div class="msg-text">${esc(text)}</div>`;
-  div.innerHTML = `<div class="msg-label">You</div><div class="msg-body">${body}</div>`;
+  let inner = '';
+  if (files && files.length) inner += _renderAttachments(files);
+  if (text) inner += `<div class="msg-body">${esc(text)}</div>`;
+  div.innerHTML = `<div class="msg-label">You</div>${inner}`;
   $('messages').appendChild(div); scrollBottom();
 }
 
