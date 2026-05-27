@@ -6,7 +6,8 @@ Hermes Platform 提供三层 API：
 
 | 层级 | 入口 | 协议 | 认证 |
 |------|------|------|------|
-| Process Broker | `/broker/*` | HTTP REST | 无 |
+| GitHub OAuth | `/auth/*` | HTTP (redirect) | OAuth cookie |
+| Process Broker | `/broker/*` | HTTP REST | OAuth cookie（可选）或 `X-User-ID` header |
 | Hermes Dashboard | `/api/*` | HTTP REST | Bearer Token |
 | Hermes Dashboard | `/api/ws` | WebSocket JSON-RPC | Token (query) |
 
@@ -14,7 +15,50 @@ Hermes Platform 提供三层 API：
 
 ---
 
-## 一、Process Broker API
+## 一、GitHub OAuth API
+
+**后端**: `hermes_broker.py` ｜ **外部路径**: `/auth/*`
+
+GitHub OAuth 登录流程，签发 JWT session cookie。
+
+### GET /auth/github
+
+重定向到 GitHub OAuth 授权页。授权后回调到 `/auth/callback`。
+
+**响应**: `307` 重定向到 `https://github.com/login/oauth/authorize?...`
+
+### GET /auth/callback?code={code}&state={state}
+
+GitHub OAuth 回调。用 code 换取 access_token → 获取 GitHub 用户信息 → 签发 JWT → 设置 cookie → 重定向到 `/chat`。
+
+**响应**: `302` 重定向到 `/chat`，并设置 cookie：
+- `hermes_session`: JWT token（HttpOnly, Secure, SameSite=Lax, 7 天有效）
+
+### GET /auth/user
+
+查询当前登录用户信息。
+
+**请求**: Cookie 中带 `hermes_session`
+
+**响应** `200`:
+```json
+{ "sub": "github_login", "name": "Display Name", "avatar": "https://avatars.githubusercontent.com/..." }
+```
+
+**错误** `401`: 未登录
+
+### POST /auth/logout
+
+清除 session cookie。
+
+**响应**:
+```json
+{ "status": "logged_out" }
+```
+
+---
+
+## 二、Process Broker API
 
 **后端**: `hermes_broker.py` ｜ **监听**: `127.0.0.1:8080` ｜ **外部路径**: `/broker/*`
 
@@ -24,7 +68,11 @@ Hermes Platform 提供三层 API：
 
 为用户分配一个 Hermes 进程。如果已有活跃进程则直接返回。
 
-**请求**:
+**认证**（二选一）:
+- OAuth 模式：Cookie `hermes_session`（JWT），从中提取 `user_id`
+- 直连模式：请求体 `{ "user_id": "alice" }` 或 Header `X-User-ID`
+
+**请求**（直连模式）:
 ```json
 { "user_id": "alice" }
 ```
@@ -63,6 +111,32 @@ Hermes Platform 提供三层 API：
 ```json
 { "status": "released", "user_id": "alice" }
 ```
+
+### POST /broker/upload
+
+上传文件到用户进程的工作目录。文件保存到 `{work_dir}/uploads/` 下，返回本地路径供后续 WS 消息引用。
+
+**认证**: 同 `/broker/sessions`（OAuth cookie 或 `user_id`）
+
+**请求**: `multipart/form-data`，字段 `file` 为文件内容。
+
+**响应** `200`:
+```json
+{
+  "path": "/tmp/hermes_sessions/alice/abc123/uploads/report.pdf",
+  "name": "report.pdf",
+  "size": 123456
+}
+```
+
+**错误**:
+- `404`: 用户无活跃会话
+- `400`: 缺少 `file` 字段或非 multipart 请求
+
+**使用流程**:
+1. 上传文件 → 获取 `path`
+2. 通过 WS 发送 `image.attach`（图片）或 `input.detect_drop`（其他文件）
+3. 用户输入文字 + `prompt.submit` 触发 Hermes 响应，prompt 中包含文件路径
 
 ### GET /broker/health
 
@@ -815,6 +889,7 @@ Hermes 使用两套 ID：
 
 | 外部路径 | 后端 | 说明 |
 |----------|------|------|
+| `/auth/*` | `127.0.0.1:8080` | GitHub OAuth 登录 |
 | `/broker/*` | `127.0.0.1:8080` | Process Broker |
 | `/hermes/ws/{port}/*` | `127.0.0.1:{port}` | Dashboard WS (Origin 重写为 127.0.0.1) |
 | `/hermes/dash/{port}/*` | `127.0.0.1:{port}` | Dashboard HTTP |

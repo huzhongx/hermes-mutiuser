@@ -23,6 +23,7 @@ import asyncio
 import logging
 import os
 import re
+import secrets
 import shutil
 import time
 import uuid
@@ -32,8 +33,10 @@ from pathlib import Path
 from typing import Dict, Optional, Set
 
 import aiohttp
+import jwt as pyjwt
+import requests as req_lib
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
 logging.basicConfig(
@@ -173,7 +176,13 @@ class ProcessBroker:
             return
         await self._kill(proc)
         self._free_port(proc.port)
+        # Only clean up the session work_dir (logs etc.), preserve hermes_home (state.db)
         if proc.work_dir and os.path.exists(proc.work_dir):
+            # Move hermes_home aside if it's inside work_dir
+            hermes_home = Path(proc.work_dir) / "hermes_home"
+            if hermes_home.exists() and str(hermes_home).startswith(str(self.work_root)):
+                # hermes_home is now at stable path, not inside work_dir — safe to remove work_dir
+                pass
             shutil.rmtree(proc.work_dir, ignore_errors=True)
 
     def get(self, user_id: str) -> Optional[HermesProcess]:
@@ -203,35 +212,37 @@ class ProcessBroker:
     # ── 预热池 ────────────────────────────────────────────
 
     async def _take_warm(self, user_id: str) -> Optional[HermesProcess]:
+        """Take a warm process, kill it, and respawn for the real user.
+
+        Warm processes use a shared __warm__ HERMES_HOME which cannot be
+        re-assigned to a different user without process isolation. We kill
+        the warm process, free its resources, and let acquire() fall through
+        to a fresh _spawn() for the real user.
+        """
         async with self._lock:
             if not self._warm:
                 return None
             sid, proc = next(iter(self._warm.items()))
             del self._warm[sid]
 
-        proc.user_id = user_id
-        proc.session_id = str(uuid.uuid4())
-        actual_dir = self.work_root / user_id / proc.session_id
-        actual_dir.mkdir(parents=True, exist_ok=True)
-        proc.work_dir = str(actual_dir)
-        logger.info(f"[{user_id}] 从预热池分配 port={proc.port}")
-        return proc
+        # Kill warm process and free its resources
+        await self._kill(proc)
+        self._free_port(proc.port)
+        if proc.work_dir and os.path.exists(proc.work_dir):
+            shutil.rmtree(proc.work_dir, ignore_errors=True)
+
+        logger.info(f"[{user_id}] 预热进程已回收，将冷启动新进程")
+        return None
 
     async def _warm_maintainer(self):
-        while True:
-            try:
-                await asyncio.sleep(self.warm_pool_interval)
-                needed = self.warm_pool_size - len(self._warm)
-                if needed <= 0:
-                    continue
-                active = len(self._procs) + len(self._warm)
-                needed = min(needed, self.max_users - active)
-                for _ in range(max(0, needed)):
-                    await self._spawn_warm()
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(f"预热池异常: {e}")
+        """Warm pool maintainer.
+
+        NOTE: With per-user HERMES_HOME isolation, warm pool processes cannot
+        be reused across users. The warm pool is effectively disabled — all
+        processes are cold-started per user. Keeping the maintainer as a no-op
+        for future optimization (e.g., pre-allocate ports or per-user warm pools).
+        """
+        pass
 
     async def _spawn_warm(self):
         sid = f"__warm_{uuid.uuid4().hex[:8]}__"
@@ -256,6 +267,19 @@ class ProcessBroker:
 
     # ── 底层：启动进程 ────────────────────────────────────
 
+    # Files symlinked into per-user HERMES_HOME (shared, read-only)
+    _SHARED_SYMLINK_FILES = [
+        "auth.json",
+        ".env",
+        "models_dev_cache.json",
+        "ollama_cloud_models_cache.json",
+    ]
+
+    # Files copied into per-user HERMES_HOME (user-specific, mutable)
+    _SHARED_COPY_FILES = [
+        "config.yaml",
+    ]
+
     async def _spawn(self, user_id: str, session_id: str = None) -> HermesProcess:
         async with self._lock:
             port = self._alloc_port()
@@ -267,6 +291,47 @@ class ProcessBroker:
         work_dir.mkdir(parents=True, exist_ok=True)
         logs_dir = work_dir / "logs"
         logs_dir.mkdir(exist_ok=True)
+
+        # Stable per-user HERMES_HOME (survives reconnects)
+        # Path: {work_root}/{user_id}/hermes_home
+        user_home = self.work_root / (user_id if user_id != "__warm__" else "__warm__") / "hermes_home"
+        user_home.mkdir(parents=True, exist_ok=True)
+
+        # Copy user-specific config files (each user has independent settings)
+        for fname in self._SHARED_COPY_FILES:
+            src = _HERMES_CONFIG_HOME / fname
+            dst = user_home / fname
+            if src.exists() and not (dst.exists() or dst.is_symlink()):
+                shutil.copy2(str(src), str(dst))
+
+        # Symlink shared config files from the global HERMES_HOME
+        for fname in self._SHARED_SYMLINK_FILES:
+            src = _HERMES_CONFIG_HOME / fname
+            dst = user_home / fname
+            if src.exists() and not (dst.exists() or dst.is_symlink()):
+                os.symlink(src, dst)
+
+        # Symlink shared directories (read-only, shared across users)
+        for dname in ("cache", "pairing"):
+            src = _HERMES_CONFIG_HOME / dname
+            dst = user_home / dname
+            if src.is_dir() and not (dst.exists() or dst.is_symlink()):
+                os.symlink(src, dst)
+
+        # Copy per-user directories (mutable, user-specific)
+        # skills: each user manages their own installed skills independently
+        for dname in ("skills",):
+            src = _HERMES_CONFIG_HOME / dname
+            dst = user_home / dname
+            if src.is_dir() and not (dst.exists() or dst.is_symlink()):
+                shutil.copytree(str(src), str(dst))
+
+        # Symlink shared files (skill snapshots etc.)
+        for fname in (".skills_prompt_snapshot.json",):
+            src = _HERMES_CONFIG_HOME / fname
+            dst = user_home / fname
+            if src.exists() and not (dst.exists() or dst.is_symlink()):
+                os.symlink(src, dst)
 
         proc = HermesProcess(
             user_id=user_id,
@@ -280,7 +345,7 @@ class ProcessBroker:
             log_fh = open(logs_dir / "session.log", "a")
 
             proc_env = os.environ.copy()
-            proc_env["HERMES_HOME"] = str(_HERMES_CONFIG_HOME)
+            proc_env["HERMES_HOME"] = str(user_home)
 
             logger.info(f"[{user_id}] 启动 dashboard port={port}")
             proc.process = await asyncio.create_subprocess_exec(
@@ -382,6 +447,56 @@ class ProcessBroker:
 
 
 # ─────────────────────────────────────────────────────────
+# GitHub OAuth & JWT Session
+# ─────────────────────────────────────────────────────────
+
+_GITHUB_CLIENT_ID = os.environ.get("GITHUB_CLIENT_ID", "")
+_GITHUB_CLIENT_SECRET = os.environ.get("GITHUB_CLIENT_SECRET", "")
+_JWT_SECRET = secrets.token_hex(32)
+_JWT_ALG = "HS256"
+_JWT_EXP_SECONDS = 7 * 24 * 3600  # 7 days
+_OAUTH_STATE_STORE: Dict[str, float] = {}  # state → created_at, in-memory
+
+
+def _oauth_enabled() -> bool:
+    return bool(_GITHUB_CLIENT_ID and _GITHUB_CLIENT_SECRET)
+
+
+def _create_jwt(github_login: str, name: str = "", avatar_url: str = "") -> str:
+    payload = {
+        "sub": github_login,
+        "name": name or github_login,
+        "avatar": avatar_url,
+        "exp": time.time() + _JWT_EXP_SECONDS,
+    }
+    return pyjwt.encode(payload, _JWT_SECRET, algorithm=_JWT_ALG)
+
+
+def _verify_jwt(token: str) -> Optional[dict]:
+    try:
+        payload = pyjwt.decode(token, _JWT_SECRET, algorithms=[_JWT_ALG])
+        return {"sub": payload["sub"], "name": payload.get("name", ""), "avatar": payload.get("avatar", "")}
+    except Exception:
+        return None
+
+
+def _get_session_user(request: Request) -> Optional[dict]:
+    """Extract user info from hermes_session cookie."""
+    token = request.cookies.get("hermes_session")
+    if not token:
+        return None
+    return _verify_jwt(token)
+
+
+def _require_session_user(request: Request) -> dict:
+    """Extract user info or raise 401."""
+    user = _get_session_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return user
+
+
+# ─────────────────────────────────────────────────────────
 # FastAPI
 # ─────────────────────────────────────────────────────────
 
@@ -401,7 +516,7 @@ app = FastAPI(title="Hermes Process Broker", lifespan=lifespan)
 
 
 class AcquireRequest(BaseModel):
-    user_id: str
+    user_id: Optional[str] = ""
 
 
 @app.middleware("http")
@@ -420,11 +535,132 @@ async def log_requests(request: Request, call_next):
     return response
 
 
-@app.post("/broker/sessions")
-async def acquire_session(body: AcquireRequest):
-    """为用户分配 Hermes 进程，返回 WS 连接信息"""
+# ── OAuth endpoints ────────────────────────────────────────
+
+@app.get("/auth/github")
+async def github_login(request: Request):
+    """Redirect to GitHub OAuth authorize page."""
+    if not _oauth_enabled():
+        raise HTTPException(status_code=500, detail="GitHub OAuth not configured")
+    state = secrets.token_urlsafe(32)
+    _OAUTH_STATE_STORE[state] = time.time()
+    # Clean old states (>10 min)
+    now = time.time()
+    expired = [k for k, v in _OAUTH_STATE_STORE.items() if now - v > 600]
+    for k in expired:
+        _OAUTH_STATE_STORE.pop(k, None)
+
+    nginx_domain = os.environ.get("HERMES_NGINX_DOMAIN", "")
+    if nginx_domain:
+        redirect_uri = f"https://{nginx_domain}/auth/callback"
+    else:
+        redirect_uri = str(request.base_url.replace(path="/auth/callback"))
+    url = (
+        f"https://github.com/login/oauth/authorize"
+        f"?client_id={_GITHUB_CLIENT_ID}"
+        f"&redirect_uri={redirect_uri}"
+        f"&scope=user:email"
+        f"&state={state}"
+    )
+    return RedirectResponse(url)
+
+
+@app.get("/auth/callback")
+async def github_callback(code: str, state: str):
+    """Handle GitHub OAuth callback — exchange code for user info, issue JWT."""
+    # Validate state
+    if state not in _OAUTH_STATE_STORE:
+        return JSONResponse({"detail": "Invalid OAuth state"}, status_code=400)
+    _OAUTH_STATE_STORE.pop(state, None)
+
+    # Exchange code → access_token
     try:
-        info = await broker.acquire(body.user_id)
+        r = req_lib.post(
+            "https://github.com/login/oauth/access_token",
+            json={"client_id": _GITHUB_CLIENT_ID, "client_secret": _GITHUB_CLIENT_SECRET, "code": code},
+            headers={"Accept": "application/json"},
+            timeout=10,
+        )
+        r.raise_for_status()
+        token_data = r.json()
+        access_token = token_data.get("access_token")
+        if not access_token:
+            raise RuntimeError(f"No access_token: {token_data}")
+    except Exception as e:
+        logger.error(f"GitHub token exchange failed: {e}")
+        return JSONResponse({"detail": "GitHub auth failed"}, status_code=502)
+
+    # Get user info
+    try:
+        u = req_lib.get(
+            "https://api.github.com/user",
+            headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json"},
+            timeout=10,
+        )
+        u.raise_for_status()
+        user_info = u.json()
+        github_login = user_info.get("login")
+        name = user_info.get("name") or github_login
+        avatar_url = user_info.get("avatar_url", "")
+        if not github_login:
+            raise RuntimeError("No login in GitHub user response")
+    except Exception as e:
+        logger.error(f"GitHub user info failed: {e}")
+        return JSONResponse({"detail": "Failed to get user info"}, status_code=502)
+
+    # Issue JWT
+    jwt_token = _create_jwt(github_login, name, avatar_url)
+    logger.info(f"GitHub login: {github_login} ({name})")
+
+    # Redirect to /chat with session cookie
+    resp = RedirectResponse(url="/chat", status_code=302)
+    resp.set_cookie(
+        key="hermes_session",
+        value=jwt_token,
+        max_age=_JWT_EXP_SECONDS,
+        httponly=True,
+        secure=bool(os.environ.get("HERMES_NGINX_DOMAIN")),
+        samesite="lax",
+    )
+    return resp
+
+
+@app.get("/auth/user")
+async def auth_user(request: Request):
+    """Return current user info from session cookie (for frontend)."""
+    user = _get_session_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return user
+
+
+@app.post("/auth/logout")
+async def auth_logout():
+    """Clear session cookie."""
+    resp = JSONResponse({"status": "logged_out"})
+    resp.delete_cookie(key="hermes_session")
+    return resp
+
+
+# ── Broker endpoints (OAuth optional) ──────────────────────
+# OAuth: if JWT cookie is present → use it as user_id
+# No cookie → fall back to body.user_id (legacy / direct API)
+
+@app.post("/broker/sessions")
+async def acquire_session(request: Request, body: AcquireRequest = None):
+    """为用户分配 Hermes 进程，返回 WS 连接信息"""
+    user_id = None
+    # Prefer JWT cookie (chat.html OAuth flow)
+    user = _get_session_user(request)
+    if user:
+        user_id = user["sub"]
+    elif body and body.user_id:
+        user_id = body.user_id
+    else:
+        raise HTTPException(status_code=400, detail="user_id required")
+
+    try:
+        info = await broker.acquire(user_id)
         return info
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
@@ -446,6 +682,46 @@ async def release_session(user_id: str):
         raise HTTPException(status_code=404, detail="用户无活跃会话")
     await broker.release(user_id)
     return {"status": "released", "user_id": user_id}
+
+
+@app.post("/broker/upload")
+async def upload_file(request: Request):
+    """Upload a file to the user's process work directory. Returns the saved path."""
+    user_id = None
+    user = _get_session_user(request)
+    if user:
+        user_id = user["sub"]
+    else:
+        # Try query param or header for legacy mode
+        user_id = request.query_params.get("user_id") or request.headers.get("X-User-ID", "")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id required")
+
+    proc = broker.get(user_id)
+    if not proc:
+        raise HTTPException(status_code=404, detail="No active session")
+
+    content_type = request.headers.get("content-type", "")
+    if not content_type.startswith("multipart/form-data"):
+        raise HTTPException(status_code=400, detail="multipart/form-data required")
+
+    form = await request.form()
+    upload = form.get("file")
+    if not upload or not upload.filename:
+        raise HTTPException(status_code=400, detail="file field required")
+
+    # Save to process work_dir / uploads
+    uploads_dir = Path(proc.work_dir) / "uploads"
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+
+    # Sanitize filename
+    safe_name = re.sub(r'[^\w.\-]', '_', upload.filename)
+    dest = uploads_dir / safe_name
+    content = await upload.read()
+    dest.write_bytes(content)
+
+    logger.info(f"[{user_id}] File uploaded: {dest} ({len(content)} bytes)")
+    return {"path": str(dest), "name": safe_name, "size": len(content)}
 
 
 @app.get("/broker/health")
