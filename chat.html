@@ -8,19 +8,20 @@
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 :root {
-  --bg: #1a1a2e;
-  --sidebar: #16213e;
-  --card: #0f3460;
-  --accent: #00b4d8;
-  --accent-hover: #0096c7;
-  --text: #e0e0e0;
-  --text-dim: #8899a6;
-  --user-bg: #0f3460;
-  --assistant-bg: #1e293b;
-  --border: #2a3a5c;
+  --bg: #f7f7f7;
+  --sidebar: #ffffff;
+  --chat-bg: #ffffff;
+  --user-bubble: #e3e3e3;
+  --assistant-bubble: #ffffff;
+  --accent: #d97757;
+  --accent-hover: #c5623f;
+  --text: #1a1a1a;
+  --text-dim: #8b8b8b;
+  --border: #e5e5e5;
   --danger: #ef4444;
   --success: #22c55e;
-  --hover: #1c2d4a;
+  --hover: #f0f0f0;
+  --code-bg: #f4f4f4;
 }
 
 body {
@@ -33,7 +34,7 @@ body {
 
 /* ── Sidebar ── */
 .sidebar {
-  width: 280px;
+  width: 260px;
   background: var(--sidebar);
   border-right: 1px solid var(--border);
   display: flex;
@@ -42,30 +43,42 @@ body {
 }
 
 .sidebar-header {
-  padding: 16px;
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   border-bottom: 1px solid var(--border);
 }
 
 .sidebar-header h2 {
-  font-size: 16px;
-  margin-bottom: 8px;
-}
-
-.conn-status {
-  font-size: 12px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
+  font-size: 15px;
+  font-weight: 600;
 }
 
 .conn-dot {
-  width: 8px; height: 8px;
+  width: 7px; height: 7px;
   border-radius: 50%;
   background: var(--danger);
   display: inline-block;
+  margin-right: 6px;
 }
 
 .conn-dot.ok { background: var(--success); }
+
+.conn-label { font-size: 11px; color: var(--text-dim); }
+
+.btn-new-chat {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+
+.btn-new-chat:hover { background: var(--hover); }
 
 .sidebar-section {
   padding: 12px 16px;
@@ -81,95 +94,48 @@ body {
   margin-bottom: 6px;
 }
 
-.sidebar-section input, .sidebar-section select {
+.sidebar-section input {
   width: 100%;
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 8px;
   padding: 8px 10px;
   color: var(--text);
   font-size: 13px;
   outline: none;
 }
 
-.sidebar-section input:focus {
-  border-color: var(--accent);
-}
+.sidebar-section input:focus { border-color: var(--accent); }
 
 .btn {
   width: 100%;
   padding: 9px;
   border: none;
-  border-radius: 6px;
+  border-radius: 8px;
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.15s;
 }
 
-.btn-primary {
-  background: var(--accent);
-  color: #fff;
-}
-
+.btn-primary { background: var(--accent); color: #fff; }
 .btn-primary:hover { background: var(--accent-hover); }
 .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
 
-.btn-danger {
-  background: transparent;
-  color: var(--danger);
-  border: 1px solid var(--danger);
+.btn-danger-sm {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 6px 0;
+  width: 100%;
+  text-align: left;
 }
 
-.btn-danger:hover { background: var(--danger); color: #fff; }
-
-.btn-ghost {
-  background: transparent;
-  color: var(--text);
-  border: 1px solid var(--border);
-}
-
-.btn-ghost:hover { background: var(--hover); border-color: var(--accent); }
-.btn-ghost:disabled { opacity: 0.4; cursor: not-allowed; }
-
-.sidebar-actions {
-  padding: 12px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
+.btn-danger-sm:hover { color: var(--danger); }
 
 /* ── Session list ── */
-.session-list-header {
-  padding: 10px 16px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  border-bottom: 1px solid var(--border);
-}
-
-.session-list-header span {
-  font-size: 11px;
-  color: var(--text-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.btn-new-chat {
-  background: none;
-  border: 1px solid var(--border);
-  color: var(--accent);
-  font-size: 12px;
-  padding: 4px 10px;
-  border-radius: 4px;
-  cursor: pointer;
-  transition: all 0.15s;
-  white-space: nowrap;
-}
-
-.btn-new-chat:hover { background: var(--hover); border-color: var(--accent); }
-.btn-new-chat:disabled { opacity: 0.4; cursor: not-allowed; }
-
 .session-list {
   flex: 1;
   overflow-y: auto;
@@ -193,12 +159,7 @@ body {
 .session-item:hover { background: var(--hover); }
 
 .session-item.active {
-  background: var(--card);
-  border-right: 2px solid var(--accent);
-}
-
-.session-item.streaming {
-  border-right-color: var(--success);
+  background: var(--hover);
 }
 
 .session-item .session-title {
@@ -210,59 +171,106 @@ body {
   min-width: 0;
 }
 
-.session-item .session-time {
-  font-size: 10px;
-  color: var(--text-dim);
+.session-item .session-title-input {
+  flex: 1;
+  font-size: 13px;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 2px 6px;
+  outline: none;
+  background: #fff;
+  min-width: 0;
+}
+
+.session-item .session-actions {
+  display: none;
+  gap: 2px;
   flex-shrink: 0;
 }
 
-.session-item .session-delete {
-  display: none;
+.session-item:hover .session-actions { display: flex; }
+
+.session-action-btn {
   background: none;
   border: none;
   color: var(--text-dim);
   cursor: pointer;
-  font-size: 14px;
-  padding: 0 2px;
-  flex-shrink: 0;
+  font-size: 13px;
+  padding: 2px 4px;
+  border-radius: 4px;
   line-height: 1;
 }
 
-.session-item:hover .session-delete { display: block; }
-.session-item .session-delete:hover { color: var(--danger); }
+.session-action-btn:hover { background: var(--border); color: var(--text); }
+.session-action-btn.danger:hover { color: var(--danger); }
 
 .session-empty {
   padding: 24px 16px;
   text-align: center;
   color: var(--text-dim);
   font-size: 12px;
-  line-height: 1.6;
 }
 
-.sidebar-info {
-  padding: 10px 16px;
+/* ── Sidebar footer ── */
+.sidebar-footer {
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
   font-size: 11px;
   color: var(--text-dim);
-  line-height: 1.6;
-  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
-/* ── Main ── */
+.model-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.model-row select {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 6px;
+  color: var(--text);
+  font-size: 11px;
+  outline: none;
+  cursor: pointer;
+}
+
+.model-row select:focus { border-color: var(--accent); }
+
+.usage-row {
+  display: flex;
+  gap: 10px;
+}
+
+.usage-tag {
+  font-size: 10px;
+  background: var(--bg);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+/* ── Main chat ── */
 .main {
   flex: 1;
   display: flex;
   flex-direction: column;
   min-width: 0;
+  background: var(--chat-bg);
 }
 
 /* ── Messages ── */
 .messages {
   flex: 1;
   overflow-y: auto;
-  padding: 24px;
+  padding: 24px 0;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 0;
 }
 
 .messages::-webkit-scrollbar { width: 6px; }
@@ -279,103 +287,97 @@ body {
   color: var(--text-dim);
 }
 
-.empty-state .logo {
-  font-size: 48px;
-  opacity: 0.3;
-}
-
+.empty-state .logo { font-size: 48px; opacity: 0.3; }
 .empty-state p { font-size: 14px; }
 
 .msg {
-  max-width: 720px;
+  max-width: 680px;
   width: 100%;
-  align-self: center;
+  margin: 0 auto;
+  padding: 16px 24px;
 }
 
-.msg-header {
+.msg-label {
   font-size: 12px;
   font-weight: 600;
   margin-bottom: 6px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
+  color: var(--text-dim);
 }
-
-.msg-header .tag {
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 11px;
-}
-
-.msg.user .msg-header .tag { background: var(--user-bg); }
-.msg.assistant .msg-header .tag { background: #1a3a2e; color: var(--success); }
-.msg.system .msg-header .tag { background: #3a2a1a; color: #fbbf24; }
 
 .msg-body {
-  padding: 12px 16px;
-  border-radius: 10px;
-  font-size: 14px;
-  line-height: 1.7;
+  font-size: 15px;
+  line-height: 1.75;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
-.msg.user .msg-body { background: var(--user-bg); }
-.msg.assistant .msg-body { background: var(--assistant-bg); }
-.msg.system .msg-body { background: #1a1a1a; color: var(--text-dim); font-size: 12px; }
+.msg.user { background: var(--bg); }
+.msg.user .msg-body { background: var(--user-bubble); border-radius: 18px; padding: 10px 16px; display: inline-block; max-width: 85%; }
+
+.msg.assistant .msg-body { padding: 0; }
+.msg.system .msg-body { font-size: 12px; color: var(--text-dim); font-style: italic; }
 
 .msg.streaming .msg-body::after {
   content: '\25CC';
   animation: blink 1s infinite;
+  color: var(--text-dim);
 }
 
-@keyframes blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0; }
+.msg-usage {
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-top: 4px;
 }
 
-/* ── Input ── */
+@keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
+/* ── Input area ── */
 .input-area {
   padding: 16px 24px 24px;
-  border-top: 1px solid var(--border);
 }
 
 .input-wrap {
-  max-width: 720px;
+  max-width: 680px;
   margin: 0 auto;
   display: flex;
-  gap: 10px;
+  gap: 6px;
   align-items: flex-end;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 6px 6px 6px 4px;
+  transition: border-color 0.15s;
 }
+
+.input-wrap:focus-within { border-color: var(--accent); }
+
+.input-wrap.dragover { border-color: var(--accent); background: #fdf0ec; }
 
 .input-wrap textarea {
   flex: 1;
-  background: var(--assistant-bg);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 10px 14px;
+  background: transparent;
+  border: none;
+  padding: 6px 10px;
   color: var(--text);
   font-size: 14px;
   font-family: inherit;
   resize: none;
   outline: none;
-  min-height: 44px;
+  min-height: 28px;
   max-height: 160px;
   line-height: 1.5;
 }
 
-.input-wrap textarea:focus { border-color: var(--accent); }
-
 .input-wrap textarea::placeholder { color: var(--text-dim); }
 
-.send-btn {
-  width: 44px;
-  height: 44px;
-  border-radius: 10px;
+.btn-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
   border: none;
-  background: var(--accent);
-  color: #fff;
-  font-size: 18px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 16px;
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -384,12 +386,24 @@ body {
   transition: all 0.15s;
 }
 
-.send-btn:hover { background: var(--accent-hover); }
-.send-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+.btn-icon:hover { background: var(--border); color: var(--text); }
+.btn-icon:disabled { opacity: 0.3; cursor: not-allowed; }
+
+.btn-icon.send {
+  background: var(--accent);
+  color: #fff;
+}
+
+.btn-icon.send:hover { background: var(--accent-hover); }
+.btn-icon.send:disabled { background: var(--border); color: var(--text-dim); }
+
+/* ── Hidden file input ── */
+.file-input { display: none; }
 
 /* ── Responsive ── */
 @media (max-width: 768px) {
-  .sidebar { width: 220px; }
+  .sidebar { width: 200px; }
+  .msg { padding: 12px 16px; }
 }
 </style>
 </head>
@@ -397,42 +411,36 @@ body {
 
 <div class="sidebar">
   <div class="sidebar-header">
-    <h2>Hermes Chat</h2>
-    <div class="conn-status">
-      <span class="conn-dot" id="connDot"></span>
-      <span id="connLabel">未连接</span>
-    </div>
+    <h2>Hermes</h2>
+    <button class="btn-new-chat" id="btnNewChat" onclick="newConversation()" style="display:none">+ 新会话</button>
   </div>
 
   <div class="sidebar-section" id="loginSection">
-    <label>Broker 地址</label>
+    <label>服务器</label>
     <input id="brokerUrl" value="https://huzhongxiang.cloud" placeholder="https://host:port">
     <div style="margin-top:8px">
-      <label>用户 ID</label>
+      <label>用户</label>
       <input id="userId" value="" placeholder="输入用户名">
     </div>
     <div style="margin-top:10px">
-      <button class="btn btn-primary" id="btnConnect" onclick="connect()">分配进程并连接</button>
+      <button class="btn btn-primary" id="btnConnect" onclick="connect()">连接</button>
     </div>
   </div>
 
-  <div class="sidebar-actions" id="connectedActions" style="display:none">
-    <button class="btn btn-ghost" id="btnNewConv" onclick="newConversation()">+ 新建会话</button>
-    <button class="btn btn-danger" onclick="disconnect()">断开并回收</button>
-  </div>
-
-  <div class="session-list-header" id="sessionListHeader" style="display:none">
-    <span>会话列表</span>
-    <button class="btn-new-chat" id="btnNewConv2" onclick="newConversation()">新建</button>
-  </div>
-
   <div class="session-list" id="sessionList">
-    <div class="session-empty" id="sessionEmpty">连接后在此显示会话</div>
+    <div class="session-empty" id="sessionEmpty">连接后显示会话</div>
   </div>
 
-  <div class="sidebar-info" id="sidebarInfo">
-    <div>模型: <span id="infoModel">-</span></div>
-    <div>进程端口: <span id="infoPort">-</span></div>
+  <div class="sidebar-footer" id="sidebarFooter" style="display:none">
+    <div class="model-row">
+      <span>模型</span>
+      <select id="modelSelect" onchange="switchModel(this.value)"></select>
+    </div>
+    <div class="usage-row" id="usageRow" style="display:none">
+      <span class="usage-tag" id="usageIn">in: 0</span>
+      <span class="usage-tag" id="usageOut">out: 0</span>
+    </div>
+    <button class="btn-danger-sm" onclick="disconnect()">断开连接</button>
   </div>
 </div>
 
@@ -440,13 +448,16 @@ body {
   <div class="messages" id="messages">
     <div class="empty-state" id="emptyState">
       <div class="logo">&#9889;</div>
-      <p>输入用户名，点击「分配进程并连接」开始对话</p>
+      <p>连接服务器开始对话</p>
     </div>
   </div>
   <div class="input-area">
-    <div class="input-wrap">
-      <textarea id="input" placeholder="输入消息... (Enter 发送, Shift+Enter 换行)" rows="1" disabled></textarea>
-      <button class="send-btn" id="sendBtn" onclick="sendMessage()" disabled>&#10148;</button>
+    <div class="input-wrap" id="inputWrap">
+      <input type="file" class="file-input" id="fileInput" accept="image/*" onchange="handleFileSelect(event)">
+      <button class="btn-icon" id="attachBtn" onclick="$('fileInput').click()" disabled title="上传图片">&#128206;</button>
+      <textarea id="input" placeholder="输入消息…" rows="1" disabled></textarea>
+      <button class="btn-icon" id="undoBtn" onclick="undoLastTurn()" disabled title="撤销上一轮">&#8617;</button>
+      <button class="btn-icon send" id="sendBtn" onclick="sendMessage()" disabled title="发送">&#10148;</button>
     </div>
   </div>
 </div>
@@ -457,21 +468,15 @@ let ws = null;
 let brokerInfo = null;
 let rpcId = 0;
 let pending = {};
-
-// Current active conversation (what user sees)
 let activeConvId = null;
-
-// Per-conversation streaming state, keyed by convId
-// { convId: { streamText: '' } }
 let streamState = {};
 let _heartbeatTimer = null;
 let _reconnectTimer = null;
 let _userDisconnect = false;
 let _reconnectAttempts = 0;
 const MAX_RECONNECT = 10;
-
-// conversations: { [convId]: { id, hermesSid, sessionKey, title, messages[], createdAt, updatedAt } }
 let conversations = {};
+let currentModel = '';
 
 const $ = id => document.getElementById(id);
 
@@ -496,62 +501,69 @@ function load(uid) {
   if (raw) { try { conversations = JSON.parse(raw); } catch(e) {} }
 }
 
-// ── Look up convId by hermesSid ──
-function convByHermesSid(hermesSid) {
+function convByHermesSid(sid) {
   for (const [id, c] of Object.entries(conversations)) {
-    if (c.hermesSid === hermesSid) return id;
+    if (c.hermesSid === sid) return id;
   }
   return null;
 }
 
-function isConvStreaming(convId) {
-  return !!streamState[convId];
-}
+function isConvStreaming(id) { return !!streamState[id]; }
 
-// ── Textarea auto-resize ──
+// ── Textarea ──
 $('input').addEventListener('input', function() {
   this.style.height = 'auto';
   this.style.height = Math.min(this.scrollHeight, 160) + 'px';
 });
 
 $('input').addEventListener('keydown', e => {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault();
-    sendMessage();
-  }
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
 });
 
-// ── Connect / Disconnect ──
+// ── Drag & drop ──
+const inputWrap = $('inputWrap');
+inputWrap.addEventListener('dragover', e => { e.preventDefault(); inputWrap.classList.add('dragover'); });
+inputWrap.addEventListener('dragleave', () => inputWrap.classList.remove('dragover'));
+inputWrap.addEventListener('drop', e => {
+  e.preventDefault();
+  inputWrap.classList.remove('dragover');
+  const file = e.dataTransfer?.files?.[0];
+  if (file && file.type.startsWith('image/')) attachImage(file);
+});
+
+// ── Connect ──
 
 async function connect() {
   const url = $('brokerUrl').value.replace(/\/+$/, '');
   const uid = $('userId').value.trim();
-  if (!uid) { alert('请输入用户 ID'); return; }
+  if (!uid) { alert('请输入用户名'); return; }
 
   setConn('connecting');
 
   try {
-    const resp = await fetch(url + '/broker/sessions', {
+    let resp = await fetch(url + '/broker/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ user_id: uid })
     });
-    if (!resp.ok) {
-      const err = await resp.json();
-      throw new Error(err.detail || 'Broker 请求失败');
+    if (resp.ok) {
+      brokerInfo = await resp.json();
+    } else {
+      resp = await fetch(url + '/broker/sessions/' + uid);
+      if (!resp.ok) throw new Error('分配进程失败');
+      brokerInfo = await resp.json();
     }
-    brokerInfo = await resp.json();
-    $('infoPort').textContent = brokerInfo.port;
 
     load(uid);
     await loadServerSessions();
-
     await connectWS(brokerInfo.ws_url);
+    await loadModelInfo();
 
     $('loginSection').style.display = 'none';
-    $('connectedActions').style.display = '';
-    $('sessionListHeader').style.display = '';
+    $('btnNewChat').style.display = '';
+    $('sidebarFooter').style.display = '';
 
+    // Resume or create
     const ids = Object.keys(conversations)
       .sort((a, b) => (conversations[b].updatedAt||0) - (conversations[a].updatedAt||0));
     if (ids.length > 0) {
@@ -564,21 +576,13 @@ async function connect() {
             conv.hermesSid = result.session_id;
             resumed = true;
             doSwitchConv(id);
-            addSystemMsg('已恢复会话: ' + (conv.title !== '新会话' ? conv.title : conv.sessionKey));
-            save();
             break;
-          } catch (e) {
-            conv.hermesSid = null;
-          }
+          } catch (e) { conv.hermesSid = null; }
         }
       }
-      if (!resumed) {
-        doSwitchConv(ids[0]);
-        await newConversation();
-      } else {
-        for (const id of ids) {
-          if (id !== activeConvId) conversations[id].hermesSid = null;
-        }
+      if (!resumed) { doSwitchConv(ids[0]); await newConversation(); }
+      else {
+        for (const id of ids) { if (id !== activeConvId) conversations[id].hermesSid = null; }
         save();
       }
     } else {
@@ -608,11 +612,10 @@ function connectWS(url) {
 function handleWS(data, initResolve) {
   if (data.method === 'event') {
     const t = data.params?.type;
-    const evtSid = data.params?.session_id || null;  // hermesSid from event
+    const evtSid = data.params?.session_id || null;
 
     if (t === 'gateway.ready') { initResolve(); return; }
 
-    // Route streaming events by the session_id in the event itself
     if (t === 'message.start') {
       const convId = convByHermesSid(evtSid);
       if (convId) {
@@ -625,8 +628,7 @@ function handleWS(data, initResolve) {
     if (t === 'message.delta') {
       const convId = convByHermesSid(evtSid);
       if (convId && streamState[convId]) {
-        const delta = data.params?.payload?.text || '';
-        streamState[convId].streamText += delta;
+        streamState[convId].streamText += data.params?.payload?.text || '';
         if (convId === activeConvId) {
           const body = document.getElementById('streamBody');
           if (body) body.textContent = streamState[convId].streamText;
@@ -641,42 +643,33 @@ function handleWS(data, initResolve) {
       if (convId && streamState[convId]) {
         const text = streamState[convId].streamText;
         delete streamState[convId];
-
-        // Remove streaming cursor if visible
         const el = document.getElementById('streamingMsg');
         if (el) el.classList.remove('streaming');
 
-        // Save to conversation
         const conv = conversations[convId];
         if (conv && text) {
           conv.messages.push({ role: 'assistant', text, ts: Date.now() });
           conv.updatedAt = Date.now();
           save();
         }
-
         renderSessionList();
         enableInput();
-
         if (conv && !conv.sessionKey) fetchSessionKey(conv.id);
+        // Fetch usage after response
+        if (conv?.hermesSid) fetchUsage(conv.id);
       }
       return;
     }
 
     if (t === 'error') {
-      addSystemMsg('Hermes 错误: ' + (data.params?.payload?.message || JSON.stringify(data.params)));
-      // Clear any streaming state for this session
-      if (evtSid) {
-        const convId = convByHermesSid(evtSid);
-        if (convId) delete streamState[convId];
-      }
+      addSystemMsg('错误: ' + (data.params?.payload?.message || ''));
+      if (evtSid) { const c = convByHermesSid(evtSid); if (c) delete streamState[c]; }
       enableInput();
       return;
     }
     if (t === 'tool.start') {
-      if (evtSid) {
-        const convId = convByHermesSid(evtSid);
-        if (convId === activeConvId) addSystemMsg('工具: ' + (data.params?.payload?.name || ''));
-      }
+      const convId = convByHermesSid(evtSid);
+      if (convId === activeConvId) addSystemMsg('使用工具: ' + (data.params?.payload?.name || ''));
       return;
     }
     if (['tool.complete','session.info','thinking.delta','reasoning.delta','reasoning.available','status.update'].includes(t)) return;
@@ -701,278 +694,197 @@ function rpc(method, params) {
   });
 }
 
-// ── Hermes HTTP REST API ──
+// ── Hermes HTTP ──
 
 async function hermesHTTP(method, path) {
   if (!brokerInfo) throw new Error('未连接');
-  const url = brokerInfo.http_url + path;
-  const resp = await fetch(url, {
+  const resp = await fetch(brokerInfo.http_url + path, {
     method,
     headers: { 'Authorization': 'Bearer ' + brokerInfo.ws_token }
   });
-  if (!resp.ok) {
-    const err = await resp.text();
-    throw new Error('HTTP ' + resp.status + ': ' + err);
-  }
+  if (!resp.ok) throw new Error('HTTP ' + resp.status);
   return resp.json();
 }
 
 async function loadServerSessions() {
   try {
     const data = await hermesHTTP('GET', '/api/sessions');
-    const serverSessions = data.sessions || [];
-
-    // Build map of local conversations by sessionKey
     const byKey = {};
-    for (const c of Object.values(conversations)) {
-      if (c.sessionKey) byKey[c.sessionKey] = c;
-    }
+    for (const c of Object.values(conversations)) { if (c.sessionKey) byKey[c.sessionKey] = c; }
 
-    for (const s of serverSessions) {
+    for (const s of (data.sessions || [])) {
       const local = byKey[s.id];
       if (local) {
-        // Update title from server if it has a meaningful one
-        if (s.title && s.title !== '新会话' && s.title !== '未命名会话') {
-          local.title = s.title;
-        }
+        if (s.title && s.title !== '新会话' && s.title !== '未命名会话') local.title = s.title;
         local._msgCount = s.message_count || 0;
       } else {
-        // New session from server not in localStorage
         const convId = 'conv_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
         conversations[convId] = {
-          id: convId,
-          hermesSid: null,
-          sessionKey: s.id,
-          title: s.title || '未命名会话',
-          messages: [],
-          createdAt: (s.started_at || 0) * 1000 || Date.now(),
-          updatedAt: (s.started_at || 0) * 1000 || Date.now(),
-          _loaded: false,
-          _msgCount: s.message_count || 0,
+          id: convId, hermesSid: null, sessionKey: s.id,
+          title: s.title || '未命名会话', messages: [],
+          createdAt: (s.started_at||0)*1000 || Date.now(),
+          updatedAt: (s.started_at||0)*1000 || Date.now(),
+          _loaded: false, _msgCount: s.message_count || 0,
         };
       }
     }
-    save();
-    renderSessionList();
-  } catch (e) {
-    console.warn('加载服务端会话失败:', e);
-  }
+    save(); renderSessionList();
+  } catch (e) { console.warn('加载服务端会话失败:', e); }
 }
 
 async function loadSessionMessages(convId) {
   const conv = conversations[convId];
-  if (!conv || !conv.sessionKey || conv._loaded) return;
+  if (!conv?.sessionKey || conv._loaded) return;
   try {
     const data = await hermesHTTP('GET', '/api/sessions/' + conv.sessionKey + '/messages');
-    const msgs = data.messages || [];
-    conv.messages = msgs
+    conv.messages = (data.messages || [])
       .filter(m => m.role === 'user' || m.role === 'assistant')
-      .map(m => ({
-        role: m.role,
-        text: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
-        ts: Date.now()
-      }));
+      .map(m => ({ role: m.role, text: typeof m.content === 'string' ? m.content : JSON.stringify(m.content), ts: Date.now() }));
     conv._loaded = true;
-    // Use first user message as title if still default
     if ((conv.title === '未命名会话' || conv.title === '新会话') && conv.messages.length > 0) {
       const first = conv.messages.find(m => m.role === 'user');
-      if (first) {
-        conv.title = first.text.slice(0, 30) + (first.text.length > 30 ? '...' : '');
-      }
+      if (first) conv.title = first.text.slice(0, 30) + (first.text.length > 30 ? '...' : '');
     }
     save();
-  } catch (e) {
-    console.warn('加载消息失败:', e);
-    addSystemMsg('加载历史消息失败: ' + e.message);
-  }
+  } catch (e) { addSystemMsg('加载历史失败'); }
 }
 
-// ── Heartbeat & Auto-reconnect ──
+// ── Model ──
+
+async function loadModelInfo() {
+  try {
+    const info = await hermesHTTP('GET', '/api/model/info');
+    currentModel = info.model || '';
+    $('modelSelect').innerHTML = `<option value="${currentModel}" selected>${currentModel}</option>`;
+  } catch (e) { console.warn('加载模型信息失败:', e); }
+}
+
+async function switchModel(model) {
+  if (!model || model === currentModel) return;
+  try {
+    await hermesHTTP('POST', '/api/model/set');
+    currentModel = model;
+    addSystemMsg('模型已切换为 ' + model + '（新会话生效）');
+  } catch (e) { addSystemMsg('切换模型失败: ' + e.message); }
+}
+
+// ── Heartbeat & Reconnect ──
 
 function startHeartbeat() {
   stopHeartbeat();
   _heartbeatTimer = setInterval(() => {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send('{"jsonrpc":"2.0","method":"ping","id":"_hb"}');
-    }
+    if (ws?.readyState === WebSocket.OPEN) ws.send('{"jsonrpc":"2.0","method":"ping","id":"_hb"}');
   }, 30000);
 }
 
-function stopHeartbeat() {
-  if (_heartbeatTimer) { clearInterval(_heartbeatTimer); _heartbeatTimer = null; }
-}
+function stopHeartbeat() { if (_heartbeatTimer) { clearInterval(_heartbeatTimer); _heartbeatTimer = null; } }
 
-function cancelReconnect() {
-  if (_reconnectTimer) { clearTimeout(_reconnectTimer); _reconnectTimer = null; }
-  _reconnectAttempts = 0;
-}
+function cancelReconnect() { if (_reconnectTimer) { clearTimeout(_reconnectTimer); _reconnectTimer = null; } _reconnectAttempts = 0; }
 
 async function autoReconnect() {
   cancelReconnect();
-  if (_reconnectAttempts >= MAX_RECONNECT) {
-    addSystemMsg('自动重连已达上限，请刷新页面或手动重新连接');
-    setConn('error');
-    return;
-  }
+  if (_reconnectAttempts >= MAX_RECONNECT) { addSystemMsg('重连已达上限，请刷新页面'); setConn('error'); return; }
   _reconnectAttempts++;
   const delay = Math.min(3000 + 2000 * _reconnectAttempts, 30000);
   setConn('connecting');
-  addSystemMsg(`连接断开，${Math.round(delay/1000)}秒后重连 (${_reconnectAttempts}/${MAX_RECONNECT})`);
+  addSystemMsg(`${Math.round(delay/1000)}秒后重连 (${_reconnectAttempts}/${MAX_RECONNECT})`);
 
   _reconnectTimer = setTimeout(async () => {
     try {
       const url = $('brokerUrl').value.replace(/\/+$/, '');
       const uid = $('userId').value.trim();
-
-      // Check if broker session is still alive
       let resp = await fetch(url + '/broker/sessions/' + uid);
-      if (resp.ok) {
+      if (resp.ok) { brokerInfo = await resp.json(); }
+      else {
+        resp = await fetch(url + '/broker/sessions', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({user_id:uid}) });
+        if (!resp.ok) throw new Error('重新分配失败');
         brokerInfo = await resp.json();
-      } else {
-        // Session expired, re-acquire
-        resp = await fetch(url + '/broker/sessions', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ user_id: uid })
-        });
-        if (!resp.ok) throw new Error('重新分配进程失败');
-        brokerInfo = await resp.json();
-        $('infoPort').textContent = brokerInfo.port;
       }
-
-      // Reconnect WS
       await connectWS(brokerInfo.ws_url);
       _reconnectAttempts = 0;
-
-      // Resume active session
       if (activeConvId && conversations[activeConvId]?.sessionKey) {
         try {
-          const result = await rpc('session.resume', { session_id: conversations[activeConvId].sessionKey });
-          conversations[activeConvId].hermesSid = result.session_id;
-          save();
-          renderMessages();
-          addSystemMsg('已自动重连并恢复会话');
-        } catch (e) {
-          addSystemMsg('重连成功但恢复会话失败: ' + e.message);
-        }
-      } else {
-        addSystemMsg('已自动重连');
+          const r = await rpc('session.resume', { session_id: conversations[activeConvId].sessionKey });
+          conversations[activeConvId].hermesSid = r.session_id;
+          save(); renderMessages();
+          addSystemMsg('已自动重连');
+        } catch (e) { addSystemMsg('恢复会话失败: ' + e.message); }
       }
       enableInput();
-
-      // Clear other sessions' hermesSid (they need individual resume)
-      for (const [id, c] of Object.entries(conversations)) {
-        if (id !== activeConvId) c.hermesSid = null;
-      }
+      for (const [id, c] of Object.entries(conversations)) { if (id !== activeConvId) c.hermesSid = null; }
       save();
-
-    } catch (e) {
-      addSystemMsg('重连失败: ' + e.message);
-      autoReconnect();
-    }
+    } catch (e) { addSystemMsg('重连失败: ' + e.message); autoReconnect(); }
   }, delay);
 }
 
 async function disconnect() {
   _userDisconnect = true;
-  cancelReconnect();
-  stopHeartbeat();
+  cancelReconnect(); stopHeartbeat();
   if (ws) { ws.close(); ws = null; }
   if (brokerInfo) {
-    try {
-      await fetch($('brokerUrl').value.replace(/\/+$/,'') + '/broker/sessions/' + $('userId').value.trim(), { method: 'DELETE' });
-    } catch(e) {}
+    try { await fetch($('brokerUrl').value.replace(/\/+$/,'') + '/broker/sessions/' + $('userId').value.trim(), { method: 'DELETE' }); } catch(e) {}
     brokerInfo = null;
   }
-  streamState = {};
-  activeConvId = null;
-  conversations = {};
-
+  streamState = {}; activeConvId = null; conversations = {};
   setConn('disconnected');
   $('loginSection').style.display = '';
-  $('connectedActions').style.display = 'none';
-  $('sessionListHeader').style.display = 'none';
-  $('sessionList').innerHTML = '<div class="session-empty">连接后在此显示会话</div>';
-  $('infoPort').textContent = '-';
-  $('infoModel').textContent = '-';
-  $('messages').innerHTML = '<div class="empty-state" id="emptyState"><div class="logo">&#9889;</div><p>输入用户名，点击「分配进程并连接」开始对话</p></div>';
+  $('btnNewChat').style.display = 'none';
+  $('sidebarFooter').style.display = 'none';
+  $('sessionList').innerHTML = '<div class="session-empty">连接后显示会话</div>';
+  $('modelSelect').innerHTML = '';
+  $('messages').innerHTML = '<div class="empty-state" id="emptyState"><div class="logo">&#9889;</div><p>连接服务器开始对话</p></div>';
   disableInput();
 }
 
 // ── Conversation management ──
 
 async function newConversation() {
-  if (!ws || ws.readyState !== WebSocket.OPEN) { addSystemMsg('请先连接'); return; }
-
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
   try {
     const result = await rpc('session.create', {});
     const convId = 'conv_' + Date.now();
     conversations[convId] = {
-      id: convId,
-      hermesSid: result.session_id,
-      sessionKey: null,
-      title: '新会话',
-      messages: [],
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
+      id: convId, hermesSid: result.session_id, sessionKey: null,
+      title: '新会话', messages: [], createdAt: Date.now(), updatedAt: Date.now(),
     };
-    $('infoModel').textContent = result.info?.model || '-';
-
     doSwitchConv(convId);
-    save();
-    renderSessionList();
-    enableInput();
-    $('input').focus();
-
+    save(); renderSessionList(); enableInput(); $('input').focus();
     fetchSessionKey(convId);
-  } catch (e) {
-    addSystemMsg('创建会话失败: ' + e.message);
-  }
+  } catch (e) { addSystemMsg('创建失败: ' + e.message); }
 }
 
 async function fetchSessionKey(convId) {
   const conv = conversations[convId];
   if (!conv || conv.sessionKey) return;
   try {
-    const status = await rpc('session.status', { session_id: conv.hermesSid });
-    const m = (status.output || '').match(/Session ID:\s*(.+)/);
-    if (m && m[1]) { conv.sessionKey = m[1].trim(); save(); }
+    const s = await rpc('session.status', { session_id: conv.hermesSid });
+    const m = (s.output || '').match(/Session ID:\s*(.+)/);
+    if (m?.[1]) { conv.sessionKey = m[1].trim(); save(); }
   } catch (e) {}
 }
 
 function doSwitchConv(convId) {
   activeConvId = convId;
-  renderSessionList();
-  renderMessages();
-  enableInput();
+  renderSessionList(); renderMessages(); enableInput();
 }
 
 async function switchConversation(convId) {
   if (!conversations[convId] || convId === activeConvId) return;
-
   const conv = conversations[convId];
 
-  if (!conv.hermesSid && conv.sessionKey && ws && ws.readyState === WebSocket.OPEN) {
+  if (!conv.hermesSid && conv.sessionKey && ws?.readyState === WebSocket.OPEN) {
     try {
-      const result = await rpc('session.resume', { session_id: conv.sessionKey });
-      conv.hermesSid = result.session_id;
-      save();
-    } catch (e) {
-      addSystemMsg('无法恢复该会话: ' + e.message);
-    }
+      const r = await rpc('session.resume', { session_id: conv.sessionKey });
+      conv.hermesSid = r.session_id; save();
+    } catch (e) { addSystemMsg('无法恢复: ' + e.message); }
   }
 
   activeConvId = convId;
   renderSessionList();
 
-  // Lazy-load messages from server if not yet loaded
-  if (conv.messages.length === 0 && conv.sessionKey && !conv._loaded) {
-    await loadSessionMessages(convId);
-  }
-
+  if (conv.messages.length === 0 && conv.sessionKey && !conv._loaded) await loadSessionMessages(convId);
   renderMessages();
 
-  // Re-attach streaming UI if this conv is streaming
   if (isConvStreaming(convId) && !document.getElementById('streamingMsg')) {
     showStreamingUI();
     const body = document.getElementById('streamBody');
@@ -980,49 +892,125 @@ async function switchConversation(convId) {
     scrollBottom();
   }
 
-  if (conv.hermesSid && !isConvStreaming(convId)) {
-    enableInput();
-  } else {
-    disableInput();
-    if (!conv.hermesSid && conv.messages.length > 0) {
-      addSystemMsg('该会话已过期，消息仅可查看。请新建会话继续对话。');
-    }
-  }
+  conv.hermesSid && !isConvStreaming(convId) ? enableInput() : disableInput();
+  fetchUsage(convId);
 }
 
 async function deleteConversation(convId, event) {
-  event.stopPropagation();
-  if (!conversations[convId]) return;
-  if (isConvStreaming(convId)) { addSystemMsg('正在响应中，请稍后删除'); return; }
-
+  event?.stopPropagation();
+  if (!conversations[convId] || isConvStreaming(convId)) return;
   const conv = conversations[convId];
-
-  // Close active WS session to release resources
-  if (conv.hermesSid && ws && ws.readyState === WebSocket.OPEN) {
-    try { await rpc('session.close', { session_id: conv.hermesSid }); } catch (e) {}
+  if (conv.hermesSid && ws?.readyState === WebSocket.OPEN) {
+    try { await rpc('session.close', { session_id: conv.hermesSid }); } catch(e) {}
   }
-  // Delete session from server via HTTP API
-  if (conv.sessionKey) {
-    try { await hermesHTTP('DELETE', '/api/sessions/' + conv.sessionKey); } catch (e) {}
-  }
+  if (conv.sessionKey) { try { await hermesHTTP('DELETE', '/api/sessions/' + conv.sessionKey); } catch(e) {} }
 
-  delete conversations[convId];
-  delete streamState[convId];
-  save();
+  delete conversations[convId]; delete streamState[convId]; save();
 
   if (convId === activeConvId) {
     activeConvId = null;
     const rest = Object.keys(conversations);
-    if (rest.length > 0) {
-      doSwitchConv(rest[rest.length - 1]);
-    } else {
-      $('messages').innerHTML = '';
-      disableInput();
-      addSystemMsg('会话已删除，请新建会话');
+    rest.length > 0 ? doSwitchConv(rest[rest.length-1]) : ($('messages').innerHTML = '', disableInput(), addSystemMsg('会话已删除'));
+  } else { renderSessionList(); }
+}
+
+// ── Session rename ──
+
+function startRename(convId, event) {
+  event?.stopPropagation();
+  const conv = conversations[convId];
+  if (!conv) return;
+  const el = document.querySelector(`[data-conv-id="${convId}"] .session-title`);
+  if (!el) return;
+  const input = document.createElement('input');
+  input.className = 'session-title-input';
+  input.value = conv.title;
+  el.replaceWith(input);
+  input.focus(); input.select();
+
+  const finish = async () => {
+    const newTitle = input.value.trim() || conv.title;
+    conv.title = newTitle; save(); renderSessionList();
+    if (conv.hermesSid && ws?.readyState === WebSocket.OPEN) {
+      try { await rpc('session.title', { session_id: conv.hermesSid, title: newTitle }); } catch(e) {}
     }
-  } else {
-    renderSessionList();
-  }
+  };
+  input.addEventListener('blur', finish);
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') input.blur(); if (e.key === 'Escape') { input.value = conv.title; input.blur(); } });
+}
+
+// ── Undo ──
+
+async function undoLastTurn() {
+  const conv = conversations[activeConvId];
+  if (!conv?.hermesSid || isConvStreaming(activeConvId)) return;
+  try {
+    const result = await rpc('session.undo', { session_id: conv.hermesSid });
+    if (result.undone) {
+      // Remove last user + assistant message pair
+      for (let i = conv.messages.length - 1; i >= 0; i--) {
+        if (conv.messages[i].role === 'assistant' || conv.messages[i].role === 'user') {
+          conv.messages.splice(i, 1);
+          if (conv.messages[i-1]?.role === 'user') { conv.messages.splice(i-1, 1); break; }
+          break;
+        }
+      }
+      save(); renderMessages();
+      addSystemMsg('已撤销上一轮');
+    }
+  } catch (e) { addSystemMsg('撤销失败: ' + e.message); }
+}
+
+// ── Compress ──
+
+async function compressConversation(convId, event) {
+  event?.stopPropagation();
+  const conv = conversations[convId];
+  if (!conv?.hermesSid) { addSystemMsg('请先打开该会话'); return; }
+  try {
+    const r = await rpc('session.compress', { session_id: conv.hermesSid, strategy: 'last' });
+    addSystemMsg(`历史已压缩: ${r.old_count || '?'} → ${r.new_count || '?'} 条`);
+  } catch (e) { addSystemMsg('压缩失败: ' + e.message); }
+}
+
+// ── Token usage ──
+
+async function fetchUsage(convId) {
+  const conv = conversations[convId];
+  if (!conv?.hermesSid) return;
+  try {
+    const u = await rpc('session.usage', { session_id: conv.hermesSid });
+    $('usageRow').style.display = convId === activeConvId ? 'flex' : 'none';
+    $('usageIn').textContent = 'in: ' + fmtTokens(u.input || 0);
+    $('usageOut').textContent = 'out: ' + fmtTokens(u.output || 0);
+  } catch (e) {}
+}
+
+function fmtTokens(n) { return n >= 1000 ? (n/1000).toFixed(1) + 'k' : String(n); }
+
+// ── Image upload ──
+
+function handleFileSelect(event) {
+  const file = event.target.files?.[0];
+  if (file?.type?.startsWith('image/')) attachImage(file);
+  event.target.value = '';
+}
+
+async function attachImage(file) {
+  const conv = conversations[activeConvId];
+  if (!conv?.hermesSid) { addSystemMsg('请先创建会话'); return; }
+  try {
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      const base64 = e.target.result;
+      addSystemMsg('正在上传图片...');
+      try {
+        await rpc('image.attach', { session_id: conv.hermesSid, path: file.name });
+        addSystemMsg('图片已附加: ' + file.name);
+      } catch (err) { addSystemMsg('上传失败: ' + err.message); }
+    };
+    reader.readAsDataURL(file);
+  } catch (e) { addSystemMsg('读取文件失败'); }
 }
 
 // ── Send message ──
@@ -1030,92 +1018,60 @@ async function deleteConversation(convId, event) {
 async function sendMessage() {
   const el = $('input');
   const text = el.value.trim();
-  if (!text || !ws || !activeConvId) return;
-
-  if (isConvStreaming(activeConvId)) return;
+  if (!text || !ws || !activeConvId || isConvStreaming(activeConvId)) return;
 
   const conv = conversations[activeConvId];
-  if (!conv || !conv.hermesSid) {
-    addSystemMsg('该会话已过期，请新建会话');
-    return;
-  }
+  if (!conv?.hermesSid) { addSystemMsg('会话已过期'); return; }
 
   conv.messages.push({ role: 'user', text, ts: Date.now() });
   conv.updatedAt = Date.now();
   if (conv.title === '新会话') {
     conv.title = text.slice(0, 30) + (text.length > 30 ? '...' : '');
+    // Update server title
+    rpc('session.title', { session_id: conv.hermesSid, title: conv.title }).catch(() => {});
     renderSessionList();
   }
-  save();
-  addUserMsg(text);
-
-  el.value = '';
-  el.style.height = 'auto';
+  save(); addUserMsg(text);
+  el.value = ''; el.style.height = 'auto';
   disableInput();
 
   try {
-    const result = await rpc('prompt.submit', {
-      session_id: conv.hermesSid,
-      text: text
-    });
+    const result = await rpc('prompt.submit', { session_id: conv.hermesSid, text });
     if (result.status !== 'streaming') {
       conv.messages.push({ role: 'assistant', text: JSON.stringify(result), ts: Date.now() });
-      conv.updatedAt = Date.now();
-      save();
-      addAssistantMsg(JSON.stringify(result));
-      enableInput();
+      conv.updatedAt = Date.now(); save();
+      addAssistantMsg(JSON.stringify(result)); enableInput();
     }
-    // If streaming, message.start event will arrive and init streamState
-  } catch (e) {
-    addSystemMsg('发送失败: ' + e.message);
-    enableInput();
-  }
+  } catch (e) { addSystemMsg('发送失败: ' + e.message); enableInput(); }
 }
 
-// ── Session list rendering ──
+// ── Rendering ──
 
 function renderSessionList() {
   const list = $('sessionList');
-  const sorted = Object.values(conversations)
-    .sort((a, b) => (b.updatedAt||0) - (a.updatedAt||0));
-
-  if (sorted.length === 0) {
-    list.innerHTML = '<div class="session-empty">暂无会话，点击「新建会话」开始</div>';
-    return;
-  }
+  const sorted = Object.values(conversations).sort((a, b) => (b.updatedAt||0) - (a.updatedAt||0));
+  if (sorted.length === 0) { list.innerHTML = '<div class="session-empty">暂无会话</div>'; return; }
 
   list.innerHTML = sorted.map(c => {
     const active = c.id === activeConvId;
-    const streaming = isConvStreaming(c.id);
-    const cls = 'session-item' + (active ? ' active' : '') + (streaming ? ' streaming' : '');
-    const count = (c.messages.length === 0 && c._msgCount > 0) ? ` · ${c._msgCount}条` : '';
-    return `<div class="${cls}" onclick="switchConversation('${c.id}')">
+    return `<div class="session-item${active ? ' active' : ''}" data-conv-id="${c.id}" onclick="switchConversation('${c.id}')">
       <span class="session-title">${esc(c.title)}</span>
-      <span class="session-time">${fmtTime(c.updatedAt || c.createdAt)}${count}</span>
-      <button class="session-delete" onclick="deleteConversation('${c.id}', event)" title="删除">&times;</button>
+      <span class="session-actions">
+        <button class="session-action-btn" onclick="startRename('${c.id}',event)" title="重命名">&#9998;</button>
+        <button class="session-action-btn" onclick="compressConversation('${c.id}',event)" title="压缩历史">&#128196;</button>
+        <button class="session-action-btn danger" onclick="deleteConversation('${c.id}',event)" title="删除">&times;</button>
+      </span>
     </div>`;
   }).join('');
 }
 
-function fmtTime(ts) {
-  if (!ts) return '';
-  const d = new Date(ts);
-  if (d.toDateString() === new Date().toDateString())
-    return d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0');
-  return (d.getMonth()+1) + '/' + d.getDate();
-}
-
-// ── Message rendering ──
-
 function renderMessages() {
   const container = $('messages');
   const conv = conversations[activeConvId];
-
   if (!conv || conv.messages.length === 0) {
-    container.innerHTML = '<div class="empty-state"><div class="logo">&#9889;</div><p>新会话已创建，开始对话吧</p></div>';
+    container.innerHTML = '<div class="empty-state"><div class="logo">&#9889;</div><p>开始对话吧</p></div>';
     return;
   }
-
   container.innerHTML = '';
   for (const m of conv.messages) {
     if (m.role === 'user') _appendMsg(container, 'user', m.text);
@@ -1125,23 +1081,18 @@ function renderMessages() {
 }
 
 function _appendMsg(container, role, text) {
-  const tag = role === 'user' ? 'You' : 'Hermes';
   const div = document.createElement('div');
   div.className = 'msg ' + role;
-  div.innerHTML = `<div class="msg-header"><span class="tag">${tag}</span></div><div class="msg-body">${esc(text)}</div>`;
+  div.innerHTML = `<div class="msg-label">${role === 'user' ? 'You' : 'Hermes'}</div><div class="msg-body">${esc(text)}</div>`;
   container.appendChild(div);
 }
-
-// ── Streaming UI ──
 
 function showStreamingUI() {
   hideEmpty();
   const div = document.createElement('div');
-  div.className = 'msg assistant streaming';
-  div.id = 'streamingMsg';
-  div.innerHTML = '<div class="msg-header"><span class="tag">Hermes</span></div><div class="msg-body" id="streamBody"></div>';
-  $('messages').appendChild(div);
-  scrollBottom();
+  div.className = 'msg assistant streaming'; div.id = 'streamingMsg';
+  div.innerHTML = '<div class="msg-label">Hermes</div><div class="msg-body" id="streamBody"></div>';
+  $('messages').appendChild(div); scrollBottom();
 }
 
 // ── UI helpers ──
@@ -1149,68 +1100,53 @@ function showStreamingUI() {
 function setConn(state) {
   const dot = $('connDot');
   const label = $('connLabel');
-  dot.className = 'conn-dot';
-  if (state === 'connected')  { dot.classList.add('ok'); label.textContent = '已连接'; }
-  else if (state === 'connecting') { label.textContent = '连接中...'; $('btnConnect').disabled = true; }
-  else if (state === 'error') { label.textContent = '连接失败'; $('btnConnect').disabled = false; }
-  else { label.textContent = '未连接'; $('btnConnect').disabled = false; }
+  if (!dot) return;
+  // Update header
+  const header = dot.parentElement;
+  if (state === 'connected') { dot.className = 'conn-dot ok'; if (header) header.innerHTML = '<span class="conn-dot ok" id="connDot"></span><span class="conn-label" id="connLabel">已连接</span>'; }
+  else if (state === 'connecting') { if (header) header.innerHTML = '<span class="conn-dot" id="connDot"></span><span class="conn-label" id="connLabel">连接中…</span>'; $('btnConnect').disabled = true; }
+  else if (state === 'error') { if (header) header.innerHTML = '<span class="conn-dot" id="connDot"></span><span class="conn-label" id="connLabel">未连接</span>'; $('btnConnect').disabled = false; }
+  else { if (header) header.innerHTML = '<span class="conn-dot" id="connDot"></span><span class="conn-label" id="connLabel">未连接</span>'; $('btnConnect').disabled = false; }
 }
 
 function enableInput() {
   if (isConvStreaming(activeConvId)) return;
-  $('input').disabled = false;
-  $('sendBtn').disabled = false;
+  $('input').disabled = false; $('sendBtn').disabled = false;
+  $('attachBtn').disabled = false; $('undoBtn').disabled = false;
   if (activeConvId) $('input').focus();
 }
 
 function disableInput() {
-  $('input').disabled = true;
-  $('sendBtn').disabled = true;
+  $('input').disabled = true; $('sendBtn').disabled = true;
+  $('attachBtn').disabled = true; $('undoBtn').disabled = true;
 }
 
-function hideEmpty() {
-  const e = $('emptyState');
-  if (e) e.style.display = 'none';
-}
+function hideEmpty() { const e = $('emptyState'); if (e) e.style.display = 'none'; }
 
 function addUserMsg(text) {
   hideEmpty();
-  const div = document.createElement('div');
-  div.className = 'msg user';
-  div.innerHTML = `<div class="msg-header"><span class="tag">You</span></div><div class="msg-body">${esc(text)}</div>`;
-  $('messages').appendChild(div);
-  scrollBottom();
+  const div = document.createElement('div'); div.className = 'msg user';
+  div.innerHTML = `<div class="msg-label">You</div><div class="msg-body">${esc(text)}</div>`;
+  $('messages').appendChild(div); scrollBottom();
 }
 
 function addAssistantMsg(text) {
   hideEmpty();
-  const div = document.createElement('div');
-  div.className = 'msg assistant';
-  div.innerHTML = `<div class="msg-header"><span class="tag">Hermes</span></div><div class="msg-body">${esc(text)}</div>`;
-  $('messages').appendChild(div);
-  scrollBottom();
+  const div = document.createElement('div'); div.className = 'msg assistant';
+  div.innerHTML = `<div class="msg-label">Hermes</div><div class="msg-body">${esc(text)}</div>`;
+  $('messages').appendChild(div); scrollBottom();
 }
 
 function addSystemMsg(text) {
   hideEmpty();
-  const div = document.createElement('div');
-  div.className = 'msg system';
+  const div = document.createElement('div'); div.className = 'msg system';
   div.innerHTML = `<div class="msg-body">${esc(text)}</div>`;
-  $('messages').appendChild(div);
-  scrollBottom();
+  $('messages').appendChild(div); scrollBottom();
 }
 
-function scrollBottom() {
-  const m = $('messages');
-  m.scrollTop = m.scrollHeight;
-}
+function scrollBottom() { const m = $('messages'); m.scrollTop = m.scrollHeight; }
 
-function esc(s) {
-  const d = document.createElement('div');
-  d.textContent = s;
-  return d.innerHTML;
-}
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 </script>
-
 </body>
 </html>
