@@ -847,20 +847,20 @@ const $ = id => document.getElementById(id);
 function storageKey(uid) { return 'hermes_chat_' + uid; }
 
 function save() {
-  const uid = $('userId').value.trim();
-  if (!uid) return;
+  if (!_currentUid) return;
   const out = {};
   for (const [id, c] of Object.entries(conversations)) {
     out[id] = { id: c.id, hermesSid: c.hermesSid, sessionKey: c.sessionKey,
                 title: c.title, messages: c.messages,
                 createdAt: c.createdAt, updatedAt: c.updatedAt };
   }
-  localStorage.setItem(storageKey(uid), JSON.stringify(out));
+  localStorage.setItem(storageKey(_currentUid), JSON.stringify(out));
 }
 
 function load(uid) {
+  _currentUid = uid || _currentUid;
   conversations = {};
-  const raw = uid && localStorage.getItem(storageKey(uid));
+  const raw = _currentUid && localStorage.getItem(storageKey(_currentUid));
   if (raw) { try { conversations = JSON.parse(raw); } catch(e) {} }
 }
 
@@ -897,6 +897,7 @@ inputWrap.addEventListener('drop', e => {
 // ── Connect ──
 
 let _oauthMode = false;  // auto-detected on page load
+let _currentUid = '';    // effective user_id for storage key
 
 function loginWithGitHub() {
   window.location.href = window.location.origin + '/auth/github';
@@ -927,6 +928,7 @@ async function connect(uid) {
     uid = $('userId')?.value?.trim();
     if (!uid) { $('userId')?.focus(); return; }
   }
+  if (uid) _currentUid = uid;
 
   setConn('connecting');
   showLoading('alloc');
@@ -2442,7 +2444,8 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape' && $('setting
     const oauth = $('oauthSection'); if (oauth) oauth.style.display = '';
     const legacy = $('legacySection'); if (legacy) legacy.style.display = 'none';
     if (user) {
-      // Already logged in — auto-connect
+      // Already logged in — hide welcome screen immediately, auto-connect
+      const ws = $('welcomeScreen'); if (ws) ws.style.display = 'none';
       connect(user.sub);
     }
   } else {
