@@ -36,7 +36,7 @@ import aiohttp
 import jwt as pyjwt
 import requests as req_lib
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
 logging.basicConfig(
@@ -722,6 +722,18 @@ async def upload_file(request: Request):
 
     logger.info(f"[{user_id}] File uploaded: {dest} ({len(content)} bytes)")
     return {"path": str(dest), "name": safe_name, "size": len(content)}
+
+
+@app.get("/broker/files/{user_id}/{filename}")
+async def download_file(user_id: str, filename: str):
+    """Serve an uploaded file for download."""
+    proc = broker.get(user_id)
+    if not proc:
+        raise HTTPException(status_code=404, detail="No active session")
+    fpath = Path(proc.work_dir) / "uploads" / filename
+    if not fpath.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(str(fpath), filename=filename)
 
 
 @app.get("/broker/health")

@@ -358,7 +358,8 @@ body {
 .msg.assistant .msg-body.md pre:hover .md-code-copy { opacity: 1; }
 .md-code-copy:hover { background: var(--hover); color: var(--text); }
 .msg.system .msg-body { font-size: 12px; color: var(--text-dim); font-style: italic; }
-.att-card { display: inline-flex; align-items: center; gap: 8px; background: var(--user-bubble); border-radius: 12px; padding: 8px 12px; max-width: 260px; overflow: hidden; }
+.att-card { display: inline-flex; align-items: center; gap: 8px; background: var(--user-bubble); border-radius: 12px; padding: 8px 12px; max-width: 260px; overflow: hidden; cursor: pointer; text-decoration: none; color: inherit; transition: background .15s; }
+.att-card:hover { background: var(--hover); }
 .att-card .att-icon { font-size: 20px; flex-shrink: 0; width: 32px; height: 32px; background: var(--bg); border-radius: 8px; display: flex; align-items: center; justify-content: center; }
 .att-card .att-info { min-width: 0; flex: 1; }
 .att-card .att-name { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); font-weight: 500; font-size: 13px; }
@@ -1557,7 +1558,7 @@ async function sendMessage() {
   // Build display text and prompt text BEFORE clearing pending files
   const displayText = text || '';
   const promptText = buildFilePrompt(text);
-  const sentFiles = _pendingFiles.map(f => ({ name: f.name, size: f.size, isImage: f.isImage }));
+  const sentFiles = _pendingFiles.map(f => ({ name: f.name, size: f.size, isImage: f.isImage, path: f.path }));
 
   // Attach pending files to session context (clears _pendingFiles)
   await attachPendingFiles(conv);
@@ -1799,9 +1800,11 @@ function scrollBottom() { const m = $('messages'); m.scrollTop = m.scrollHeight;
 function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
 function _renderAttachments(files) {
-  return '<div class="msg-attachments">' + files.map(f =>
-    `<div class="att-card"><span class="att-icon">${f.isImage ? '&#128247;' : '&#128196;'}</span><div class="att-info"><span class="att-name">${esc(f.name)}</span><span class="att-size">${_fmtSize(f.size)}</span></div></div>`
-  ).join('') + '</div>';
+  return '<div class="msg-attachments">' + files.map(f => {
+    const url = f.path && _currentUid ? window.location.origin + '/broker/files/' + encodeURIComponent(_currentUid) + '/' + encodeURIComponent(f.name) : '#';
+    const target = f.isImage ? ' target="_blank"' : '';
+    return `<a class="att-card" href="${url}" download="${esc(f.name)}"${target}><span class="att-icon">${f.isImage ? '&#128247;' : '&#128196;'}</span><div class="att-info"><span class="att-name">${esc(f.name)}</span><span class="att-size">${_fmtSize(f.size)}</span></div></a>`;
+  }).join('') + '</div>';
 }
 
 // ── Markdown rendering ──
