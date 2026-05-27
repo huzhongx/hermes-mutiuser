@@ -367,9 +367,40 @@ Token 即 Broker 返回的 `ws_token`（与 WS 共用）。少数端点为公开
 | GET/POST | `/api/profiles` | 列出/创建 profile |
 | GET/PUT/DELETE | `/api/profiles/{name}` | 管理 profile |
 | GET/PUT | `/api/profiles/{name}/soul` | 读写 profile 人格配置 |
-| GET | `/api/skills` | 列出可用技能 |
-| PUT | `/api/skills/toggle` | 开关技能 |
 | GET | `/api/logs` | 系统日志 |
+
+#### GET /api/skills
+
+列出所有可用技能及其启用状态。
+
+```json
+[
+  {
+    "name": "hermes-agent",
+    "description": "Hermes Agent documentation and setup",
+    "enabled": true
+  },
+  {
+    "name": "code-assistant",
+    "description": "Code review and generation",
+    "enabled": false
+  }
+]
+```
+
+#### PUT /api/skills/toggle
+
+启用或禁用指定技能。
+
+```json
+// 请求
+{ "name": "code-assistant", "enabled": true }
+
+// 响应
+{ "ok": true, "name": "code-assistant", "enabled": true }
+```
+
+**注意**: HTTP API 仅支持列表和开关操作。安装、搜索、浏览等功能需通过 WS `skills.manage` 方法（见 3.3 节）。
 
 ---
 
@@ -610,7 +641,85 @@ Token 即 Broker 返回的 `ws_token`（与 WS 共用）。少数端点为公开
 
 ---
 
-### 3.3 其他方法
+### 3.3 Skills 管理
+
+#### skills.manage
+
+统一的技能管理方法，通过 `action` 参数区分操作。
+
+**列出技能**:
+```json
+{ "method": "skills.manage", "params": { "action": "list" } }
+// → { "skills": [{ "name": "...", ... }] }
+```
+
+**搜索技能**:
+```json
+{ "method": "skills.manage", "params": { "action": "search", "query": "code" } }
+// → { "results": [{ "name": "code-assistant", "description": "..." }] }
+```
+
+**安装技能**:
+```json
+{ "method": "skills.manage", "params": { "action": "install", "query": "skill-name" } }
+// → { "installed": true, "name": "skill-name" }
+```
+
+**浏览技能库**:
+```json
+{ "method": "skills.manage", "params": { "action": "browse", "query": "1", "page_size": 20 } }
+// → 分页结果
+```
+
+**查看技能详情**:
+```json
+{ "method": "skills.manage", "params": { "action": "inspect", "query": "skill-name" } }
+// → { "info": { ... } }
+```
+
+| action | 参数 | 说明 |
+|--------|------|------|
+| `list` | 无 | 列出所有可用技能 |
+| `search` | `query` (必填) | 搜索技能 |
+| `install` | `query` (必填，技能名) | 从 hub 安装技能 |
+| `browse` | `query` (页码), `page_size` | 分页浏览技能库 |
+| `inspect` | `query` (必填，技能名) | 查看技能详情 |
+
+#### skills.reload
+
+重新扫描文件系统，检测新增或移除的技能。
+
+```json
+{ "method": "skills.reload", "params": {} }
+
+// →
+{
+  "output": "Reloading skills...\nAdded skills:\n  - new-skill\n2 skill(s) available",
+  "result": {
+    "added": [{ "name": "new-skill" }],
+    "removed": [],
+    "total": 2
+  }
+}
+```
+
+**Skills 功能矩阵**:
+
+| 操作 | HTTP REST | WS JSON-RPC |
+|------|-----------|-------------|
+| 列出技能 | `GET /api/skills` | `skills.manage {action:"list"}` |
+| 启用/禁用 | `PUT /api/skills/toggle` | — |
+| 搜索技能 | — | `skills.manage {action:"search"}` |
+| 安装技能 | — | `skills.manage {action:"install"}` |
+| 浏览技能库 | — | `skills.manage {action:"browse"}` |
+| 查看详情 | — | `skills.manage {action:"inspect"}` |
+| 重新扫描 | — | `skills.reload` |
+| 删除/卸载 | — | ❌ 不支持 |
+| 创建自定义 | — | ❌ 不支持（需手动添加文件） |
+
+---
+
+### 3.4 其他方法
 
 | 方法 | 参数 | 说明 |
 |------|------|------|
@@ -627,7 +736,7 @@ Token 即 Broker 返回的 `ws_token`（与 WS 共用）。少数端点为公开
 
 ---
 
-### 3.4 事件推送
+### 3.5 事件推送
 
 服务端主动推送的事件，格式：
 
@@ -689,7 +798,7 @@ Token 即 Broker 返回的 `ws_token`（与 WS 共用）。少数端点为公开
 
 ---
 
-### 3.5 会话 ID 说明
+### 3.6 会话 ID 说明
 
 Hermes 使用两套 ID：
 
