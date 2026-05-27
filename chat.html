@@ -1,9 +1,13 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Hermes Chat</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNiAxNiI+PHBhdGggZD0iTTggMS41djEzIiBzdHJva2U9IiNkOTc3NTciIHN0cm9rZS13aWR0aD0iMS41IiBzdHJva2UtbGluZWNhcD0icm91bmQiLz48cGF0aCBkPSJNOCAzLjI1Yy0yLjM1LTEuNC00LjctLjk1LTYuMjUuMzUgMS44NS0uMiAzLjguMiA1LjU1IDEuNTUiIHN0cm9rZT0iI2Q5Nzc1NyIgc3Ryb2tlLXdpZHRoPSIxLjEiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPjxwYXRoIGQ9Ik04IDMuMjVjMi4zNS0xLjQgNC43LS45NSA2LjI1LjM1LTEuODUtLjItMy44LjItNS41NSAxLjU1IiBzdHJva2U9IiNkOTc3NTciIHN0cm9rZS13aWR0aD0iMS4xIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz48cGF0aCBkPSJNOCAxMy4yNWMtMi4zLTEtMy4wNS0yLjY1LTEuMzUtNC4xNS0yIC44LTIuMzUgMi45NS0uMzUgNCIgc3Ryb2tlPSIjZDk3NzU3IiBzdHJva2Utd2lkdGg9IjEuMSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+PHBhdGggZD0iTTggMTMuMjVjMi4zLTEgMy4wNS0yLjY1IDEuMzUtNC4xNSAyIC44IDIuMzUgMi45NS4zNSA0IiBzdHJva2U9IiNkOTc3NTciIHN0cm9rZS13aWR0aD0iMS4xIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz48Y2lyY2xlIGN4PSI4IiBjeT0iMS44IiByPSIxLjEiIGZpbGw9IiNkOTc3NTciLz48L3N2Zz4=">
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11/styles/github.min.css">
+<script src="https://cdn.jsdelivr.net/npm/highlight.js@11/highlight.min.js"></script>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -14,6 +18,7 @@
   --user-bubble: #e3e3e3;
   --assistant-bubble: #ffffff;
   --accent: #d97757;
+  --accent-dim: #d9775744;
   --accent-hover: #c5623f;
   --text: #1a1a1a;
   --text-dim: #8b8b8b;
@@ -328,13 +333,71 @@ body {
 .msg.user .msg-body { background: var(--user-bubble); border-radius: 18px; padding: 10px 16px; display: inline-block; max-width: 85%; }
 
 .msg.assistant .msg-body { padding: 0; }
+.msg.assistant .msg-body.md { line-height: 1.7; }
+.msg.assistant .msg-body.md p { margin: 0 0 12px 0; }
+.msg.assistant .msg-body.md p:last-child { margin-bottom: 0; }
+.msg.assistant .msg-body.md ul, .msg.assistant .msg-body.md ol { margin: 0 0 12px 0; padding-left: 24px; }
+.msg.assistant .msg-body.md li { margin-bottom: 4px; }
+.msg.assistant .msg-body.md h1, .msg.assistant .msg-body.md h2, .msg.assistant .msg-body.md h3, .msg.assistant .msg-body.md h4 { margin: 16px 0 8px 0; font-weight: 600; }
+.msg.assistant .msg-body.md h1 { font-size: 1.4em; }
+.msg.assistant .msg-body.md h2 { font-size: 1.2em; }
+.msg.assistant .msg-body.md h3 { font-size: 1.05em; }
+.msg.assistant .msg-body.md blockquote { border-left: 3px solid var(--accent); margin: 0 0 12px 0; padding: 4px 16px; color: var(--text-dim); }
+.msg.assistant .msg-body.md table { border-collapse: collapse; margin: 0 0 12px 0; font-size: 14px; width: 100%; }
+.msg.assistant .msg-body.md th, .msg.assistant .msg-body.md td { border: 1px solid var(--border); padding: 6px 12px; text-align: left; }
+.msg.assistant .msg-body.md th { background: var(--bg); font-weight: 600; }
+.msg.assistant .msg-body.md a { color: var(--accent); text-decoration: none; }
+.msg.assistant .msg-body.md a:hover { text-decoration: underline; }
+.msg.assistant .msg-body.md img { max-width: 100%; border-radius: 8px; }
+.msg.assistant .msg-body.md hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
+.msg.assistant .msg-body.md code:not(pre code) { background: var(--code-bg); padding: 2px 6px; border-radius: 4px; font-size: 0.9em; font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; }
+.msg.assistant .msg-body.md pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 10px; margin: 0 0 12px 0; overflow-x: auto; position: relative; }
+.msg.assistant .msg-body.md pre code { display: block; padding: 14px 16px; font-size: 13px; line-height: 1.6; font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; }
+.md-code-copy { position: absolute; top: 6px; right: 6px; background: var(--sidebar); border: 1px solid var(--border); border-radius: 6px; padding: 3px 8px; font-size: 11px; cursor: pointer; color: var(--text-dim); opacity: 0; transition: opacity .15s; }
+.msg.assistant .msg-body.md pre:hover .md-code-copy { opacity: 1; }
+.md-code-copy:hover { background: var(--hover); color: var(--text); }
 .msg.system .msg-body { font-size: 12px; color: var(--text-dim); font-style: italic; }
 
 .msg.streaming .msg-body::after {
-  content: '\25CC';
-  animation: blink 1s infinite;
-  color: var(--text-dim);
+  content: '';
+  display: inline-block;
+  width: 2px; height: 16px;
+  background: var(--accent);
+  margin-left: 3px;
+  vertical-align: text-bottom;
+  animation: cursorBlink 0.6s steps(2) infinite;
 }
+.msg.streaming .msg-label::after {
+  content: '';
+  display: inline-block;
+  width: 6px; height: 6px;
+  background: var(--accent);
+  border-radius: 50%;
+  margin-left: 6px;
+  vertical-align: middle;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+/* Tool running card */
+.msg.tool-running {
+  background: linear-gradient(135deg, #fef3ee 0%, #fff7f4 100%);
+  border: 1px solid var(--accent-dim);
+  border-radius: 10px;
+  padding: 8px 14px;
+}
+.msg.tool-running .msg-body {
+  font-size: 12px; color: var(--text); font-style: normal;
+  display: flex; align-items: center; gap: 8px;
+}
+.msg.tool-running .tool-dots span {
+  display: inline-block;
+  width: 5px; height: 5px;
+  background: var(--accent);
+  border-radius: 50%;
+  animation: dotBounce 1.4s ease-in-out infinite;
+}
+.msg.tool-running .tool-dots span:nth-child(2) { animation-delay: 0.2s; }
+.msg.tool-running .tool-dots span:nth-child(3) { animation-delay: 0.4s; }
 
 .msg-usage {
   font-size: 10px;
@@ -343,6 +406,31 @@ body {
 }
 
 @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+@keyframes cursorBlink { 0% { opacity: 1; } 100% { opacity: 0; } }
+@keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; transform: scale(0.7); } }
+@keyframes dotBounce { 0%, 80%, 100% { transform: scale(0.4); opacity: 0.3; } 40% { transform: scale(1); opacity: 1; } }
+@keyframes slideDown { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
+
+/* ── Thinking bar ── */
+.thinking-bar {
+  display: flex; align-items: center; gap: 10px;
+  max-width: 680px; width: 100%;
+  margin: 0 auto 8px auto;
+  padding: 8px 16px;
+  background: linear-gradient(135deg, #fef3ee 0%, #fff7f4 100%);
+  border: 1px solid var(--accent-dim);
+  border-radius: 10px;
+  animation: slideDown 0.25s ease;
+}
+.thinking-dots { display: flex; gap: 4px; }
+.thinking-dots span {
+  display: inline-block; width: 7px; height: 7px;
+  background: var(--accent); border-radius: 50%;
+  animation: dotBounce 1.4s ease-in-out infinite;
+}
+.thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
+.thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
+.thinking-text { font-size: 12px; color: var(--accent); font-weight: 500; }
 
 /* ── Input area ── */
 .input-area {
@@ -383,6 +471,20 @@ body {
 
 .input-wrap textarea::placeholder { color: var(--text-dim); }
 
+.pending-file {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--accent-dim); border-radius: 6px;
+  padding: 4px 10px; margin: 2px 4px; font-size: 12px;
+  max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pending-file .pf-name { overflow: hidden; text-overflow: ellipsis; }
+.pending-file .pf-remove {
+  cursor: pointer; color: var(--text-dim); font-size: 14px; line-height: 1;
+  flex-shrink: 0;
+}
+.pending-file .pf-remove:hover { color: var(--danger); }
+#pendingFiles { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px 6px 0; }
+
 .btn-icon {
   width: 32px;
   height: 32px;
@@ -413,6 +515,16 @@ body {
 /* ── Hidden file input ── */
 .file-input { display: none; }
 
+/* ── GitHub login button ── */
+.btn-github {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  width: 100%; padding: 12px 20px;
+  background: #24292e; color: #fff; border: none; border-radius: 10px;
+  font-size: 15px; font-weight: 600; cursor: pointer; transition: background .15s;
+}
+.btn-github:hover { background: #2f363d; }
+.btn-github svg { flex-shrink: 0; }
+
 /* ── Settings panel (inline split) ── */
 .settings-header {
   padding: 20px 24px;
@@ -438,6 +550,60 @@ body {
   display: flex; justify-content: center; padding: 60px 0; color: var(--text-dim); font-size: 14px;
 }
 
+/* ── Welcome screen & loading ── */
+.welcome-screen {
+  position: absolute; inset: 0; z-index: 100;
+  background: var(--bg); display: flex; align-items: center; justify-content: center;
+  animation: fadeIn 0.3s ease;
+}
+.welcome-card {
+  width: 380px; text-align: center; padding: 48px 36px 36px;
+  background: var(--sidebar); border-radius: 16px;
+  border: 1px solid var(--border);
+  box-shadow: 0 2px 24px rgba(0,0,0,0.06);
+}
+.welcome-card .logo { font-size: 42px; margin-bottom: 8px; }
+.welcome-card h1 { font-size: 22px; font-weight: 700; margin-bottom: 4px; }
+.welcome-card p { font-size: 13px; color: var(--text-dim); margin-bottom: 28px; }
+.welcome-card label { display: block; text-align: left; font-size: 12px; font-weight: 600; margin-bottom: 6px; color: var(--text-dim); }
+.welcome-card input {
+  width: 100%; padding: 10px 14px; border: 1px solid var(--border); border-radius: 10px;
+  font-size: 14px; outline: none; background: var(--bg); color: var(--text);
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.welcome-card input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(217,119,87,0.12); }
+.welcome-card .field + .field { margin-top: 14px; }
+.welcome-card .btn {
+  width: 100%; margin-top: 20px; padding: 11px; font-size: 14px; font-weight: 600;
+  border-radius: 10px; transition: all 0.2s;
+}
+.welcome-card .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.welcome-card .btn:not(:disabled):hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(217,119,87,0.3); }
+
+.loading-overlay {
+  position: absolute; inset: 0; z-index: 100;
+  background: var(--bg); display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 20px;
+}
+.spinner {
+  width: 36px; height: 36px; border: 3px solid var(--border);
+  border-top-color: var(--accent); border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+.loading-steps { display: flex; flex-direction: column; gap: 8px; min-width: 200px; }
+.loading-step {
+  display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--text-dim);
+  transition: color 0.3s, opacity 0.3s;
+}
+.loading-step.active { color: var(--text); }
+.loading-step.done { color: var(--success); }
+.loading-step .step-icon { width: 18px; text-align: center; font-size: 12px; }
+.loading-step .step-icon.check { color: var(--success); }
+
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes slideUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+
 .s-card {
   background: var(--bg); border-radius: 12px;
   padding: 20px; margin-bottom: 16px;
@@ -458,9 +624,23 @@ body {
 }
 .s-select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(217,119,87,0.15); }
 
+.s-input {
+  background: var(--sidebar); border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 12px; font-size: 13px; color: var(--text); outline: none;
+  width: 100%; font-family: inherit;
+}
+.s-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(217,119,87,0.15); }
+.s-input::placeholder { color: var(--text-dim); }
+
 .usage-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 4px; }
 .usage-table th { text-align: left; padding: 8px 10px; font-weight: 600; color: var(--text-dim); border-bottom: 1px solid var(--border); font-size: 11px; }
 .usage-table td { padding: 8px 10px; border-bottom: 1px solid var(--border); }
+
+.usage-chart { width: 100%; height: 120px; border-radius: 8px; background: var(--sidebar); }
+.chart-legend { display: flex; gap: 16px; margin-top: 6px; font-size: 11px; color: var(--text-dim); }
+.chart-legend span { display: flex; align-items: center; gap: 4px; }
+.legend-dot { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+
 
 .skill-item { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; background: var(--sidebar); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 6px; }
 .skill-info { flex: 1; min-width: 0; }
@@ -484,8 +664,16 @@ body {
 .cron-btn:hover { border-color: var(--accent); color: var(--accent); }
 .cron-btn.danger:hover { border-color: var(--danger); color: var(--danger); }
 
-.cron-form { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; padding: 14px; background: var(--sidebar); border: 1px solid var(--border); border-radius: 10px; }
-.cron-form input, .cron-form select { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; font-size: 13px; color: var(--text); outline: none; }
+.cron-form { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; padding: 14px; background: var(--sidebar); border: 1px solid var(--border); border-radius: 10px; }
+.cron-form input, .cron-form select, .cron-form textarea { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; font-size: 13px; color: var(--text); outline: none; font-family: inherit; }
+.cron-form input:focus, .cron-form select:focus, .cron-form textarea:focus { border-color: var(--accent); }
+.cron-form textarea { resize: vertical; min-height: 60px; }
+.cron-row { display: flex; gap: 8px; align-items: center; }
+.cron-row > * { flex: 1; }
+.cron-freq-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+.cron-freq-btn { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 6px 14px; font-size: 12px; cursor: pointer; color: var(--text-dim); transition: all .15s; }
+.cron-freq-btn:hover { border-color: var(--accent); color: var(--accent); }
+.cron-freq-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 .cron-form input:focus { border-color: var(--accent); }
 .cron-form-actions { display: flex; gap: 8px; margin-top: 4px; }
 .cron-form-actions .btn { flex: 1; }
@@ -496,13 +684,37 @@ body {
 .skill-search button { background: var(--accent); color: #fff; border: none; border-radius: 8px; padding: 8px 16px; font-size: 13px; font-weight: 500; cursor: pointer; }
 .skill-search button:hover { background: var(--accent-hover); }
 
+.skill-item { cursor: default; }
+.skill-info { cursor: pointer; }
+.skill-info:hover .skill-name { color: var(--accent); }
+.skill-detail {
+  position: fixed; inset: 0; z-index: 200; background: rgba(0,0,0,0.3);
+  display: flex; align-items: center; justify-content: center;
+  animation: fadeIn 0.15s ease;
+}
+.skill-detail-card {
+  width: 460px; max-height: 80vh; background: var(--sidebar); border-radius: 14px;
+  border: 1px solid var(--border); box-shadow: 0 8px 32px rgba(0,0,0,0.12);
+  overflow-y: auto; padding: 24px;
+}
+.skill-detail-card h2 { font-size: 18px; margin-bottom: 4px; }
+.skill-detail-card .sd-author { font-size: 12px; color: var(--text-dim); margin-bottom: 16px; }
+.skill-detail-card .sd-section { margin-bottom: 14px; }
+.skill-detail-card .sd-label { font-size: 11px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; margin-bottom: 4px; }
+.skill-detail-card .sd-text { font-size: 13px; line-height: 1.6; white-space: pre-wrap; }
+.skill-detail-card .sd-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+.skill-detail-card .sd-tag { font-size: 11px; padding: 2px 8px; background: var(--bg); border-radius: 4px; color: var(--text-dim); }
+.skill-detail-card .sd-actions { display: flex; gap: 8px; margin-top: 20px; }
+.skill-detail-card .sd-close { position: absolute; top: 12px; right: 12px; background: none; border: none; font-size: 18px; cursor: pointer; color: var(--text-dim); }
+.skill-detail-card .sd-close:hover { color: var(--text); }
+
 .s-empty { text-align: center; color: var(--text-dim); font-size: 13px; padding: 16px 0; }
 
 /* Footer user */
 .footer-user { display: flex; align-items: center; gap: 8px; }
 .user-avatar { width: 28px; height: 28px; background: var(--accent); color: #fff; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; flex-shrink: 0; }
 .user-name { flex: 1; font-size: 13px; font-weight: 500; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.btn-icon-sm { width: 26px; height: 26px; border-radius: 50%; border: none; background: transparent; color: var(--text-dim); font-size: 15px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.btn-icon-sm { width: 34px; height: 34px; border-radius: 50%; border: none; background: transparent; color: var(--text-dim); font-size: 18px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
 .btn-icon-sm:hover { background: var(--hover); color: var(--text); }
 
 /* ── Responsive ── */
@@ -517,50 +729,75 @@ body {
 
 <div class="sidebar">
   <div class="sidebar-header">
-    <h2>Hermes</h2>
-    <button class="btn-new-chat" id="btnNewChat" onclick="newConversation()" style="display:none">+ 新会话</button>
+    <h2><svg width="16" height="16" viewBox="0 0 16 16" style="vertical-align:-2px;margin-right:4px"><path d="M8 1.5v13" stroke="var(--accent)" stroke-width="1.5" stroke-linecap="round"/><path d="M8 3.25c-2.35-1.4-4.7-.95-6.25.35 1.85-.2 3.8.2 5.55 1.55" stroke="var(--accent)" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 3.25c2.35-1.4 4.7-.95 6.25.35-1.85-.2-3.8.2-5.55 1.55" stroke="var(--accent)" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 13.25c-2.3-1-3.05-2.65-1.35-4.15-2 .8-2.35 2.95-.35 4" stroke="var(--accent)" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 13.25c2.3-1 3.05-2.65 1.35-4.15 2 .8 2.35 2.95.35 4" stroke="var(--accent)" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/><circle cx="8" cy="1.8" r="1.1" fill="var(--accent)"/></svg>Hermes</h2>
+    <button class="btn-new-chat" id="btnNewChat" onclick="newConversation()" style="display:none">+ New chat</button>
   </div>
 
-  <div class="sidebar-section" id="loginSection">
-    <label>服务器</label>
-    <input id="brokerUrl" value="https://huzhongxiang.cloud" placeholder="https://host:port">
-    <div style="margin-top:8px">
-      <label>用户</label>
-      <input id="userId" value="" placeholder="输入用户名">
-    </div>
-    <div style="margin-top:10px">
-      <button class="btn btn-primary" id="btnConnect" onclick="connect()">连接</button>
-    </div>
-  </div>
+  
 
   <div class="session-list" id="sessionList">
-    <div class="session-empty" id="sessionEmpty">连接后显示会话</div>
+    <div class="session-empty" id="sessionEmpty">Connect to start</div>
   </div>
 
   <div class="sidebar-footer" id="sidebarFooter" style="display:none">
     <div class="footer-user">
       <span class="user-avatar" id="userAvatar"></span>
       <span class="user-name" id="footerUserName"></span>
-      <button class="btn-icon-sm" onclick="openSettings()" title="设置">&#9881;</button>
-      <button class="btn-icon-sm" onclick="disconnect()" title="断开连接" style="margin-left:-2px">&#x23FB;</button>
+      <button class="btn-icon-sm" onclick="openSettings()" title="Settings">&#9881;</button>
+      <button class="btn-icon-sm" onclick="disconnect()" title="Disconnect" style="margin-left:-2px">&#x23FB;</button>
     </div>
   </div>
 </div>
 
 <div class="main">
+  <div class="welcome-screen" id="welcomeScreen">
+    <div class="welcome-card">
+      <div class="logo"><svg width="48" height="48" viewBox="0 0 16 16"><path d="M8 1.5v13" stroke="var(--accent)" stroke-width="1.5" stroke-linecap="round"/><path d="M8 3.25c-2.35-1.4-4.7-.95-6.25.35 1.85-.2 3.8.2 5.55 1.55" stroke="var(--accent)" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 3.25c2.35-1.4 4.7-.95 6.25.35-1.85-.2-3.8.2-5.55 1.55" stroke="var(--accent)" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/><circle cx="8" cy="1.8" r="1.1" fill="var(--accent)"/></svg></div>
+      <h1>Hermes Chat</h1>
+      <p>Multi-user AI assistant platform</p>
+      <div id="oauthSection">
+        <button class="btn btn-primary btn-github" id="btnGithubLogin" onclick="loginWithGitHub()">
+          <svg height="20" viewBox="0 0 16 16" width="20" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path></svg>
+          Login with GitHub
+        </button>
+      </div>
+      <div id="legacySection" style="display:none">
+        <div class="field">
+          <label>Server</label>
+          <input id="brokerUrl" value="https://huzhongxiang.cloud" placeholder="https://host:port">
+        </div>
+        <div class="field">
+          <label>Username</label>
+          <input id="userId" value="" placeholder="Enter username">
+        </div>
+        <button class="btn btn-primary" id="btnConnect" onclick="connect()">Connect</button>
+      </div>
+    </div>
+  </div>
+  <div class="loading-overlay" id="loadingOverlay" style="display:none">
+    <div class="spinner"></div>
+    <div class="loading-steps" id="loadingSteps"></div>
+  </div>
   <div class="messages" id="messages">
     <div class="empty-state" id="emptyState">
-      <div class="logo">&#9889;</div>
-      <p>连接服务器开始对话</p>
+      <div class="logo"><svg width="48" height="48" viewBox="0 0 16 16"><path d="M8 1.5v13" stroke="var(--accent)" stroke-width="1.5" stroke-linecap="round"/><path d="M8 3.25c-2.35-1.4-4.7-.95-6.25.35 1.85-.2 3.8.2 5.55 1.55" stroke="var(--accent)" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 3.25c2.35-1.4 4.7-.95 6.25.35-1.85-.2-3.8.2-5.55 1.55" stroke="var(--accent)" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/><circle cx="8" cy="1.8" r="1.1" fill="var(--accent)"/></svg></div>
+      <p>Connect to start chatting</p>
     </div>
   </div>
   <div class="input-area">
+    <div class="thinking-bar" id="thinkingBar" style="display:none">
+      <span class="thinking-dots"><span></span><span></span><span></span></span>
+      <span class="thinking-text" id="thinkingText">Hermes is thinking…</span>
+    </div>
     <div class="input-wrap" id="inputWrap">
-      <input type="file" class="file-input" id="fileInput" accept="image/*" onchange="handleFileSelect(event)">
-      <button class="btn-icon" id="attachBtn" onclick="$('fileInput').click()" disabled title="上传图片">&#128206;</button>
-      <textarea id="input" placeholder="输入消息…" rows="1" disabled></textarea>
-      <button class="btn-icon" id="undoBtn" onclick="undoLastTurn()" disabled title="撤销上一轮">&#8617;</button>
-      <button class="btn-icon send" id="sendBtn" onclick="sendMessage()" disabled title="发送">&#10148;</button>
+      <input type="file" class="file-input" id="fileInput" onchange="handleFileSelect(event)">
+      <button class="btn-icon" id="attachBtn" onclick="$('fileInput').click()" disabled title="Upload file">&#128206;</button>
+      <div class="input-main" style="flex:1;display:flex;flex-direction:column;min-width:0">
+        <div id="pendingFiles" style="display:none"></div>
+        <textarea id="input" placeholder="Type a message…" rows="1" disabled></textarea>
+      </div>
+      <button class="btn-icon" id="undoBtn" onclick="undoLastTurn()" disabled title="Undo last turn">&#8617;</button>
+      <button class="btn-icon send" id="sendBtn" onclick="sendMessage()" disabled title="Send">&#10148;</button>
     </div>
   </div>
   <div class="settings-col" id="settingsCol" style="display:none">
@@ -576,7 +813,7 @@ body {
         <button class="settings-close" onclick="closeSettings()">&#10005;</button>
       </div>
       <div class="settings-body" id="settingsBody">
-        <div class="settings-loading">加载中…</div>
+        <div class="settings-loading">Loading…</div>
       </div>
     </div>
   </div>
@@ -637,7 +874,7 @@ $('input').addEventListener('input', function() {
 });
 
 $('input').addEventListener('keydown', e => {
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendMessage(); }
 });
 
 // ── Drag & drop ──
@@ -647,43 +884,89 @@ inputWrap.addEventListener('dragleave', () => inputWrap.classList.remove('dragov
 inputWrap.addEventListener('drop', e => {
   e.preventDefault();
   inputWrap.classList.remove('dragover');
-  const file = e.dataTransfer?.files?.[0];
-  if (file && file.type.startsWith('image/')) attachImage(file);
+  const files = e.dataTransfer?.files;
+  if (files?.length) uploadFiles(files);
 });
 
 // ── Connect ──
 
-async function connect() {
-  const url = $('brokerUrl').value.replace(/\/+$/, '');
-  const uid = $('userId').value.trim();
-  if (!uid) { alert('请输入用户名'); return; }
+let _oauthMode = false;  // auto-detected on page load
+
+function loginWithGitHub() {
+  window.location.href = window.location.origin + '/auth/github';
+}
+
+async function detectAuthMode() {
+  try {
+    const resp = await fetch(window.location.origin + '/auth/user', { credentials: 'include' });
+    if (resp.ok) {
+      const user = await resp.json();
+      _oauthMode = true;
+      return user;  // {sub, name, avatar}
+    }
+    if (resp.status === 401) {
+      // Auth endpoint exists → OAuth mode, but not logged in
+      _oauthMode = true;
+      return null;
+    }
+  } catch(e) {}
+  // Auth endpoint not found → legacy mode
+  _oauthMode = false;
+  return null;
+}
+
+async function connect(uid) {
+  const url = _oauthMode ? window.location.origin : ($('brokerUrl')?.value || window.location.origin).replace(/\/+$/, '');
+  if (!_oauthMode && !uid) {
+    uid = $('userId')?.value?.trim();
+    if (!uid) { $('userId')?.focus(); return; }
+  }
 
   setConn('connecting');
+  showLoading('alloc');
 
   try {
-    let resp = await fetch(url + '/broker/sessions', {
+    const fetchOpts = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user_id: uid })
-    });
+      body: JSON.stringify(_oauthMode ? {} : { user_id: uid }),
+    };
+    if (_oauthMode) fetchOpts.credentials = 'include';
+
+    let resp = await fetch(url + '/broker/sessions', fetchOpts);
+    if (resp.status === 401) {
+      hideLoading();
+      window.location.href = url + '/auth/github';
+      return;
+    }
     if (resp.ok) {
       brokerInfo = await resp.json();
     } else {
-      resp = await fetch(url + '/broker/sessions/' + uid);
-      if (!resp.ok) throw new Error('分配进程失败');
+      // Fallback: try GET (existing session)
+      const getUserId = _oauthMode ? '' : uid;
+      const getOpts = _oauthMode ? { credentials: 'include' } : {};
+      resp = await fetch(url + '/broker/sessions/' + getUserId, getOpts);
+      if (!resp.ok) throw new Error('Failed to allocate process');
       brokerInfo = await resp.json();
     }
 
-    load(uid);
+    // Determine effective user_id
+    const effectiveUid = brokerInfo.user_id || uid || 'user';
+
+    showLoading('load');
+    load(effectiveUid);
     await loadServerSessions();
+
+    showLoading('ws');
     await connectWS(brokerInfo.ws_url);
+
+    showLoading('model');
     await loadModelInfo();
 
-    $('loginSection').style.display = 'none';
     $('btnNewChat').style.display = '';
     $('sidebarFooter').style.display = '';
-    $('footerUserName').textContent = uid;
-    $('userAvatar').textContent = uid.charAt(0).toUpperCase();
+    $('footerUserName').textContent = effectiveUid;
+    $('userAvatar').textContent = effectiveUid.charAt(0).toUpperCase();
 
     // Resume or create
     const ids = Object.keys(conversations)
@@ -694,6 +977,7 @@ async function connect() {
         const conv = conversations[id];
         if (conv.sessionKey) {
           try {
+            showLoading('resume');
             const result = await rpc('session.resume', { session_id: conv.sessionKey });
             conv.hermesSid = result.session_id;
             resumed = true;
@@ -710,9 +994,11 @@ async function connect() {
     } else {
       await newConversation();
     }
+    hideLoading();
   } catch (e) {
+    hideLoading();
     setConn('error');
-    addSystemMsg('连接失败: ' + e.message);
+    addSystemMsg('Connection failed: ' + e.message);
   }
 }
 
@@ -753,7 +1039,12 @@ function handleWS(data, initResolve) {
         streamState[convId].streamText += data.params?.payload?.text || '';
         if (convId === activeConvId) {
           const body = document.getElementById('streamBody');
-          if (body) body.textContent = streamState[convId].streamText;
+          if (body) {
+            clearTimeout(_streamRenderTimer);
+            _streamRenderTimer = setTimeout(() => {
+              if (body) { body.innerHTML = renderMd(streamState[convId]?.streamText || ''); addCodeCopyBtns(body.parentElement); scrollBottom(); }
+            }, 120);
+          }
           scrollBottom();
         }
       }
@@ -766,7 +1057,11 @@ function handleWS(data, initResolve) {
         const text = streamState[convId].streamText;
         delete streamState[convId];
         const el = document.getElementById('streamingMsg');
-        if (el) el.classList.remove('streaming');
+        if (el) {
+          el.classList.remove('streaming');
+          const body = el.querySelector('.msg-body');
+          if (body) { body.innerHTML = renderMd(text); addCodeCopyBtns(el); }
+        }
 
         const conv = conversations[convId];
         if (conv && text) {
@@ -784,14 +1079,38 @@ function handleWS(data, initResolve) {
     }
 
     if (t === 'error') {
-      addSystemMsg('错误: ' + (data.params?.payload?.message || ''));
+      addSystemMsg('Error: ' + (data.params?.payload?.message || ''));
       if (evtSid) { const c = convByHermesSid(evtSid); if (c) delete streamState[c]; }
       enableInput();
       return;
     }
     if (t === 'tool.start') {
       const convId = convByHermesSid(evtSid);
-      if (convId === activeConvId) addSystemMsg('使用工具: ' + (data.params?.payload?.name || ''));
+      if (convId === activeConvId) {
+        hideEmpty();
+        const toolName = data.params?.payload?.name || 'Unknown';
+        const div = document.createElement('div'); div.className = 'msg tool-running';
+        div.innerHTML = `<div class="msg-body"><span class="tool-dots"><span></span><span></span><span></span></span><span>Running: <strong>${esc(toolName)}</strong></span></div>`;
+        div.id = 'toolRun_' + toolName.replace(/\W/g, '_');
+        $('messages').appendChild(div); scrollBottom();
+        showToolThinking(toolName);
+      }
+      return;
+    }
+    if (t === 'tool.complete') {
+      const convId = convByHermesSid(evtSid);
+      if (convId === activeConvId) {
+        const toolName = data.params?.payload?.name || '';
+        const el = toolName ? document.getElementById('toolRun_' + toolName.replace(/\W/g, '_')) : null;
+        if (el) {
+          el.className = 'msg tool-running';
+          el.querySelector('.tool-dots')?.remove();
+          const label = el.querySelector('strong');
+          if (label) label.parentElement.innerHTML = '<strong>' + esc(toolName) + '</strong> &#10003; Done';
+          el.style.borderColor = 'var(--success)';
+          el.style.background = 'linear-gradient(135deg, #f0fdf4 0%, #fefffe 100%)';
+        }
+      }
       return;
     }
     if (['tool.complete','session.info','thinking.delta','reasoning.delta','reasoning.available','status.update'].includes(t)) return;
@@ -806,20 +1125,25 @@ function handleWS(data, initResolve) {
   }
 }
 
-function rpc(method, params) {
+function rpc(method, params, timeout) {
   return new Promise((resolve, reject) => {
     const id = String(++rpcId);
     pending[id] = { resolve, reject };
     const p = { jsonrpc: '2.0', id, method };
     if (params) p.params = params;
     ws.send(JSON.stringify(p));
+    if (timeout) {
+      setTimeout(() => {
+        if (pending[id]) { delete pending[id]; reject(new Error('RPC timeout: ' + method)); }
+      }, timeout);
+    }
   });
 }
 
 // ── Hermes HTTP ──
 
 async function hermesHTTP(method, path, body) {
-  if (!brokerInfo) throw new Error('未连接');
+  if (!brokerInfo) throw new Error('Not connected');
   const opts = { method, headers: { 'Authorization': 'Bearer ' + brokerInfo.ws_token } };
   if (body) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
   const resp = await fetch(brokerInfo.http_url + path, opts);
@@ -831,27 +1155,36 @@ async function hermesHTTP(method, path, body) {
 async function loadServerSessions() {
   try {
     const data = await hermesHTTP('GET', '/api/sessions');
+    const serverKeys = new Set((data.sessions || []).map(s => s.id));
     const byKey = {};
     for (const c of Object.values(conversations)) { if (c.sessionKey) byKey[c.sessionKey] = c; }
 
     for (const s of (data.sessions || [])) {
       const local = byKey[s.id];
       if (local) {
-        if (s.title && s.title !== '新会话' && s.title !== '未命名会话') local.title = s.title;
+        if (s.title && s.title !== 'New chat' && s.title !== 'Untitled') local.title = s.title;
         local._msgCount = s.message_count || 0;
       } else {
         const convId = 'conv_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
         conversations[convId] = {
           id: convId, hermesSid: null, sessionKey: s.id,
-          title: s.title || '未命名会话', messages: [],
+          title: s.title || 'Untitled', messages: [],
           createdAt: (s.started_at||0)*1000 || Date.now(),
           updatedAt: (s.started_at||0)*1000 || Date.now(),
           _loaded: false, _msgCount: s.message_count || 0,
         };
       }
     }
+
+    // Remove local sessions that no longer exist on server
+    const toRemove = [];
+    for (const [id, c] of Object.entries(conversations)) {
+      if (c.sessionKey && !serverKeys.has(c.sessionKey)) toRemove.push(id);
+    }
+    for (const id of toRemove) delete conversations[id];
+
     save(); renderSessionList();
-  } catch (e) { console.warn('加载服务端会话失败:', e); }
+  } catch (e) { console.warn('Failed to load server sessions:', e); }
 }
 
 async function loadSessionMessages(convId) {
@@ -863,12 +1196,12 @@ async function loadSessionMessages(convId) {
       .filter(m => m.role === 'user' || m.role === 'assistant')
       .map(m => ({ role: m.role, text: typeof m.content === 'string' ? m.content : JSON.stringify(m.content), ts: Date.now() }));
     conv._loaded = true;
-    if ((conv.title === '未命名会话' || conv.title === '新会话') && conv.messages.length > 0) {
+    if ((conv.title === 'Untitled' || conv.title === 'New chat') && conv.messages.length > 0) {
       const first = conv.messages.find(m => m.role === 'user');
       if (first) conv.title = first.text.slice(0, 30) + (first.text.length > 30 ? '...' : '');
     }
     save();
-  } catch (e) { addSystemMsg('加载历史失败'); }
+  } catch (e) { addSystemMsg('Failed to load history'); }
 }
 
 // ── Model ──
@@ -877,7 +1210,7 @@ async function loadModelInfo() {
   try {
     const info = await hermesHTTP('GET', '/api/model/info');
     currentModel = info.model || '';
-  } catch (e) { console.warn('加载模型信息失败:', e); }
+  } catch (e) { console.warn('Failed to load model info:', e); }
 }
 
 async function switchModel(model) {
@@ -885,8 +1218,8 @@ async function switchModel(model) {
   try {
     await hermesHTTP('POST', '/api/model/set', { scope: 'main', model });
     currentModel = model;
-    addSystemMsg('模型已切换为 ' + model + '（新会话生效）');
-  } catch (e) { addSystemMsg('切换模型失败: ' + e.message); }
+    addSystemMsg('Model switched to ' + model);
+  } catch (e) { addSystemMsg('Failed to switch model: ' + e.message); }
 }
 
 // ── Heartbeat & Reconnect ──
@@ -904,11 +1237,11 @@ function cancelReconnect() { if (_reconnectTimer) { clearTimeout(_reconnectTimer
 
 async function autoReconnect() {
   cancelReconnect();
-  if (_reconnectAttempts >= MAX_RECONNECT) { addSystemMsg('重连已达上限，请刷新页面'); setConn('error'); return; }
+  if (_reconnectAttempts >= MAX_RECONNECT) { addSystemMsg('Max retries reached, please refresh'); setConn('error'); return; }
   _reconnectAttempts++;
   const delay = Math.min(3000 + 2000 * _reconnectAttempts, 30000);
   setConn('connecting');
-  addSystemMsg(`${Math.round(delay/1000)}秒后重连 (${_reconnectAttempts}/${MAX_RECONNECT})`);
+  addSystemMsg(`Reconnecting in ${Math.round(delay/1000)}s (${_reconnectAttempts}/${MAX_RECONNECT})`);
 
   _reconnectTimer = setTimeout(async () => {
     try {
@@ -918,7 +1251,7 @@ async function autoReconnect() {
       if (resp.ok) { brokerInfo = await resp.json(); }
       else {
         resp = await fetch(url + '/broker/sessions', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({user_id:uid}) });
-        if (!resp.ok) throw new Error('重新分配失败');
+        if (!resp.ok) throw new Error('Failed to reassign process');
         brokerInfo = await resp.json();
       }
       await connectWS(brokerInfo.ws_url);
@@ -928,13 +1261,13 @@ async function autoReconnect() {
           const r = await rpc('session.resume', { session_id: conversations[activeConvId].sessionKey });
           conversations[activeConvId].hermesSid = r.session_id;
           save(); renderMessages();
-          addSystemMsg('已自动重连');
-        } catch (e) { addSystemMsg('恢复会话失败: ' + e.message); }
+          addSystemMsg('Auto-reconnected');
+        } catch (e) { addSystemMsg('Failed to resume session: ' + e.message); }
       }
       enableInput();
       for (const [id, c] of Object.entries(conversations)) { if (id !== activeConvId) c.hermesSid = null; }
       save();
-    } catch (e) { addSystemMsg('重连失败: ' + e.message); autoReconnect(); }
+    } catch (e) { addSystemMsg('Reconnect failed: ' + e.message); autoReconnect(); }
   }, delay);
 }
 
@@ -943,16 +1276,23 @@ async function disconnect() {
   cancelReconnect(); stopHeartbeat();
   if (ws) { ws.close(); ws = null; }
   if (brokerInfo) {
-    try { await fetch($('brokerUrl').value.replace(/\/+$/,'') + '/broker/sessions/' + $('userId').value.trim(), { method: 'DELETE' }); } catch(e) {}
+    try {
+      const url = _oauthMode ? window.location.origin : ($('brokerUrl')?.value || window.location.origin).replace(/\/+$/, '');
+      const getUserId = _oauthMode ? '' : ($('userId')?.value?.trim() || '');
+      const opts = { method: 'DELETE' };
+      if (_oauthMode) opts.credentials = 'include';
+      await fetch(url + '/broker/sessions/' + getUserId, opts);
+    } catch(e) {}
     brokerInfo = null;
   }
   streamState = {}; activeConvId = null; conversations = {};
   setConn('disconnected');
-  $('loginSection').style.display = '';
+  const wScreen = $('welcomeScreen');
+  if (wScreen) wScreen.style.display = 'flex';
   $('btnNewChat').style.display = 'none';
   $('sidebarFooter').style.display = 'none';
-  $('sessionList').innerHTML = '<div class="session-empty">连接后显示会话</div>';
-  $('messages').innerHTML = '<div class="empty-state" id="emptyState"><div class="logo">&#9889;</div><p>连接服务器开始对话</p></div>';
+  $('sessionList').innerHTML = '<div class="session-empty">Connect to start</div>';
+  $('messages').innerHTML = '<div class="empty-state" id="emptyState"><div class="logo"><svg width="48" height="48" viewBox="0 0 16 16"><path d="M8 1.5v13" stroke="var(--accent)" stroke-width="1.5" stroke-linecap="round"/><path d="M8 3.25c-2.35-1.4-4.7-.95-6.25.35 1.85-.2 3.8.2 5.55 1.55" stroke="var(--accent)" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 3.25c2.35-1.4 4.7-.95 6.25.35-1.85-.2-3.8.2-5.55 1.55" stroke="var(--accent)" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/><circle cx="8" cy="1.8" r="1.1" fill="var(--accent)"/></svg></div><p>Connect to server to start chatting</p></div>';
   disableInput();
 }
 
@@ -965,12 +1305,12 @@ async function newConversation() {
     const convId = 'conv_' + Date.now();
     conversations[convId] = {
       id: convId, hermesSid: result.session_id, sessionKey: null,
-      title: '新会话', messages: [], createdAt: Date.now(), updatedAt: Date.now(),
+      title: 'New chat', messages: [], createdAt: Date.now(), updatedAt: Date.now(),
     };
     doSwitchConv(convId);
     save(); renderSessionList(); enableInput(); $('input').focus();
     fetchSessionKey(convId);
-  } catch (e) { addSystemMsg('创建失败: ' + e.message); }
+  } catch (e) { addSystemMsg('Failed to create: ' + e.message); }
 }
 
 async function fetchSessionKey(convId) {
@@ -990,13 +1330,14 @@ function doSwitchConv(convId) {
 
 async function switchConversation(convId) {
   if (!conversations[convId] || convId === activeConvId) return;
+  closeSettings();
   const conv = conversations[convId];
 
   if (!conv.hermesSid && conv.sessionKey && ws?.readyState === WebSocket.OPEN) {
     try {
       const r = await rpc('session.resume', { session_id: conv.sessionKey });
       conv.hermesSid = r.session_id; save();
-    } catch (e) { addSystemMsg('无法恢复: ' + e.message); }
+    } catch (e) { addSystemMsg('Cannot resume: ' + e.message); }
   }
 
   activeConvId = convId;
@@ -1008,7 +1349,7 @@ async function switchConversation(convId) {
   if (isConvStreaming(convId) && !document.getElementById('streamingMsg')) {
     showStreamingUI();
     const body = document.getElementById('streamBody');
-    if (body) body.textContent = streamState[convId].streamText;
+    if (body) { body.innerHTML = renderMd(streamState[convId].streamText); addCodeCopyBtns(body.parentElement); }
     scrollBottom();
   }
 
@@ -1030,7 +1371,7 @@ async function deleteConversation(convId, event) {
   if (convId === activeConvId) {
     activeConvId = null;
     const rest = Object.keys(conversations);
-    rest.length > 0 ? doSwitchConv(rest[rest.length-1]) : ($('messages').innerHTML = '', disableInput(), addSystemMsg('会话已删除'));
+    rest.length > 0 ? doSwitchConv(rest[rest.length-1]) : ($('messages').innerHTML = '', disableInput(), addSystemMsg('Chat deleted'));
   } else { renderSessionList(); }
 }
 
@@ -1076,9 +1417,9 @@ async function undoLastTurn() {
         }
       }
       save(); renderMessages();
-      addSystemMsg('已撤销上一轮');
+      addSystemMsg('Last turn undone');
     }
-  } catch (e) { addSystemMsg('撤销失败: ' + e.message); }
+  } catch (e) { addSystemMsg('Undo failed: ' + e.message); }
 }
 
 // ── Compress ──
@@ -1086,11 +1427,11 @@ async function undoLastTurn() {
 async function compressConversation(convId, event) {
   event?.stopPropagation();
   const conv = conversations[convId];
-  if (!conv?.hermesSid) { addSystemMsg('请先打开该会话'); return; }
+  if (!conv?.hermesSid) { addSystemMsg('Please open this chat first'); return; }
   try {
     const r = await rpc('session.compress', { session_id: conv.hermesSid, strategy: 'last' });
-    addSystemMsg(`历史已压缩: ${r.old_count || '?'} → ${r.new_count || '?'} 条`);
-  } catch (e) { addSystemMsg('压缩失败: ' + e.message); }
+    addSystemMsg(`Compressed: ${r.old_count || '?'} → ${r.new_count || '?'} messages`);
+  } catch (e) { addSystemMsg('Compress failed: ' + e.message); }
 }
 
 // ── Token usage ──
@@ -1106,29 +1447,93 @@ async function fetchUsage(convId) {
 
 function fmtTokens(n) { return n >= 1000 ? (n/1000).toFixed(1) + 'k' : String(n); }
 
-// ── Image upload ──
+// ── File upload (two-step: upload → show chip → send with message) ──
+
+let _pendingFiles = [];  // {name, path, size, isImage}
 
 function handleFileSelect(event) {
-  const file = event.target.files?.[0];
-  if (file?.type?.startsWith('image/')) attachImage(file);
+  const files = event.target.files;
+  if (files?.length) uploadFiles(files);
   event.target.value = '';
 }
 
-async function attachImage(file) {
+function renderPendingFiles() {
+  const el = $('pendingFiles');
+  if (!el) return;
+  if (_pendingFiles.length === 0) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  el.style.display = 'flex';
+  el.innerHTML = _pendingFiles.map((f, i) =>
+    `<span class="pending-file"><span class="pf-name">${esc(f.name)}</span><span class="pf-remove" onclick="removePendingFile(${i})">&times;</span></span>`
+  ).join('');
+}
+
+function removePendingFile(idx) {
+  _pendingFiles.splice(idx, 1);
+  renderPendingFiles();
+}
+
+async function uploadFiles(fileList) {
   const conv = conversations[activeConvId];
-  if (!conv?.hermesSid) { addSystemMsg('请先创建会话'); return; }
-  try {
-    const reader = new FileReader();
-    reader.onload = async (e) => {
-      const base64 = e.target.result;
-      addSystemMsg('正在上传图片...');
-      try {
-        await rpc('image.attach', { session_id: conv.hermesSid, path: file.name });
-        addSystemMsg('图片已附加: ' + file.name);
-      } catch (err) { addSystemMsg('上传失败: ' + err.message); }
-    };
-    reader.readAsDataURL(file);
-  } catch (e) { addSystemMsg('读取文件失败'); }
+  if (!conv?.hermesSid) { addSystemMsg('Please create a chat first'); return; }
+  if (!brokerInfo) { addSystemMsg('Not connected'); return; }
+
+  for (const file of fileList) {
+    addSystemMsg('Uploading ' + file.name + '\u2026');
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const opts = { method: 'POST', body: formData };
+      if (_oauthMode) opts.credentials = 'include';
+      else opts.headers = { 'X-User-ID': brokerInfo.user_id };
+
+      const base = window.location.origin;
+      const r = await fetch(base + '/broker/upload', opts);
+      if (!r.ok) throw new Error('Upload failed: HTTP ' + r.status);
+      const result = await r.json();
+
+      _pendingFiles.push({
+        name: file.name,
+        path: result.path,
+        size: file.size,
+        isImage: /\.(png|jpe?g|gif|webp|bmp|svg|tiff?)$/i.test(file.name),
+      });
+      renderPendingFiles();
+      addSystemMsg(file.name + ' ready (' + _fmtSize(file.size) + ')');
+      $('input')?.focus();
+    } catch (e) {
+      addSystemMsg('Upload failed (' + file.name + '): ' + e.message);
+    }
+  }
+}
+
+function buildFilePrompt(text) {
+  if (_pendingFiles.length === 0) return text;
+  const fileParts = _pendingFiles.map(f => {
+    const icon = f.isImage ? '📷' : '📄';
+    return icon + ' ' + f.name + ' (' + _fmtSize(f.size) + ')\nFile path: ' + f.path;
+  });
+  const fileSummary = _pendingFiles.length === 1
+    ? 'Attached file:\n' + fileParts[0]
+    : 'Attached files:\n' + fileParts.map((p,i) => (i+1) + '. ' + p).join('\n');
+  return (text ? text + '\n\n' : '') + fileSummary;
+}
+
+async function attachPendingFiles(conv) {
+  for (const f of _pendingFiles) {
+    if (f.isImage) {
+      try { await rpc('image.attach', { session_id: conv.hermesSid, path: f.path }, 10000); } catch(e) {}
+    } else {
+      try { await rpc('input.detect_drop', { session_id: conv.hermesSid, text: f.path }, 10000); } catch(e) {}
+    }
+  }
+  _pendingFiles = [];
+  renderPendingFiles();
+}
+
+function _fmtSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
 }
 
 // ── Send message ──
@@ -1136,31 +1541,37 @@ async function attachImage(file) {
 async function sendMessage() {
   const el = $('input');
   const text = el.value.trim();
-  if (!text || !ws || !activeConvId || isConvStreaming(activeConvId)) return;
+  if ((!text && _pendingFiles.length === 0) || !ws || !activeConvId || isConvStreaming(activeConvId)) return;
 
   const conv = conversations[activeConvId];
-  if (!conv?.hermesSid) { addSystemMsg('会话已过期'); return; }
+  if (!conv?.hermesSid) { addSystemMsg('Session expired'); return; }
 
-  conv.messages.push({ role: 'user', text, ts: Date.now() });
+  // Build display text and prompt text BEFORE clearing pending files
+  const displayText = text || '📎 ' + _pendingFiles.map(f => f.name).join(', ');
+  const promptText = buildFilePrompt(text);
+
+  // Attach pending files to session context (clears _pendingFiles)
+  await attachPendingFiles(conv);
+
+  conv.messages.push({ role: 'user', text: displayText, ts: Date.now() });
   conv.updatedAt = Date.now();
-  if (conv.title === '新会话') {
-    conv.title = text.slice(0, 30) + (text.length > 30 ? '...' : '');
-    // Update server title
+  if (conv.title === 'New chat') {
+    conv.title = displayText.slice(0, 30) + (displayText.length > 30 ? '...' : '');
     rpc('session.title', { session_id: conv.hermesSid, title: conv.title }).catch(() => {});
     renderSessionList();
   }
-  save(); addUserMsg(text);
+  save(); addUserMsg(displayText);
   el.value = ''; el.style.height = 'auto';
   disableInput();
 
   try {
-    const result = await rpc('prompt.submit', { session_id: conv.hermesSid, text });
+    const result = await rpc('prompt.submit', { session_id: conv.hermesSid, text: promptText });
     if (result.status !== 'streaming') {
       conv.messages.push({ role: 'assistant', text: JSON.stringify(result), ts: Date.now() });
       conv.updatedAt = Date.now(); save();
       addAssistantMsg(JSON.stringify(result)); enableInput();
     }
-  } catch (e) { addSystemMsg('发送失败: ' + e.message); enableInput(); }
+  } catch (e) { addSystemMsg('Send failed: ' + e.message); enableInput(); }
 }
 
 // ── Rendering ──
@@ -1171,19 +1582,19 @@ function _timeGroup(ts) {
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   const yesterdayStart = todayStart - 86400000;
   const weekStart = todayStart - 7 * 86400000;
-  if (ts >= todayStart) return '今天';
-  if (ts >= yesterdayStart) return '昨天';
-  if (ts >= weekStart) return '过去 7 天';
-  return '更早';
+  if (ts >= todayStart) return 'Today';
+  if (ts >= yesterdayStart) return 'Yesterday';
+  if (ts >= weekStart) return 'Previous 7 Days';
+  return 'Older';
 }
 
 function renderSessionList() {
   const list = $('sessionList');
   const sorted = Object.values(conversations).sort((a, b) => (b.updatedAt||0) - (a.updatedAt||0));
-  if (sorted.length === 0) { list.innerHTML = '<div class="session-empty">暂无会话</div>'; return; }
+  if (sorted.length === 0) { list.innerHTML = '<div class="session-empty">No conversations</div>'; return; }
 
   const groups = [];
-  const groupOrder = ['今天', '昨天', '过去 7 天', '更早'];
+  const groupOrder = ['Today', 'Yesterday', 'Previous 7 Days', 'Older'];
   const groupMap = {};
   for (const c of sorted) {
     const g = _timeGroup(c.updatedAt || Date.now());
@@ -1199,9 +1610,9 @@ function renderSessionList() {
       html += `<div class="session-item${active ? ' active' : ''}" data-conv-id="${c.id}" onclick="switchConversation('${c.id}')">
         <span class="session-title">${esc(c.title)}</span>
         <span class="session-actions">
-          <button class="session-action-btn" onclick="startRename('${c.id}',event)" title="重命名">&#9998;</button>
-          <button class="session-action-btn" onclick="compressConversation('${c.id}',event)" title="压缩历史">&#128196;</button>
-          <button class="session-action-btn danger" onclick="deleteConversation('${c.id}',event)" title="删除">&times;</button>
+          <button class="session-action-btn" onclick="startRename('${c.id}',event)" title="Rename">&#9998;</button>
+          <button class="session-action-btn" onclick="compressConversation('${c.id}',event)" title="Compress">&#128196;</button>
+          <button class="session-action-btn danger" onclick="deleteConversation('${c.id}',event)" title="Delete">&times;</button>
         </span>
       </div>`;
     }
@@ -1213,7 +1624,7 @@ function renderMessages() {
   const container = $('messages');
   const conv = conversations[activeConvId];
   if (!conv || conv.messages.length === 0) {
-    container.innerHTML = '<div class="empty-state"><div class="logo">&#9889;</div><p>开始对话吧</p></div>';
+    container.innerHTML = '<div class="empty-state"><div class="logo"><svg width="48" height="48" viewBox="0 0 16 16"><path d="M8 1.5v13" stroke="var(--accent)" stroke-width="1.5" stroke-linecap="round"/><path d="M8 3.25c-2.35-1.4-4.7-.95-6.25.35 1.85-.2 3.8.2 5.55 1.55" stroke="var(--accent)" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 3.25c2.35-1.4 4.7-.95 6.25.35-1.85-.2-3.8.2-5.55 1.55" stroke="var(--accent)" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/><circle cx="8" cy="1.8" r="1.1" fill="var(--accent)"/></svg></div><p>Start a conversation</p></div>';
     return;
   }
   container.innerHTML = '';
@@ -1227,42 +1638,117 @@ function renderMessages() {
 function _appendMsg(container, role, text) {
   const div = document.createElement('div');
   div.className = 'msg ' + role;
-  div.innerHTML = `<div class="msg-label">${role === 'user' ? 'You' : 'Hermes'}</div><div class="msg-body">${esc(text)}</div>`;
+  const bodyHtml = role === 'assistant' ? renderMd(text) : esc(text);
+  div.innerHTML = `<div class="msg-label">${role === 'user' ? 'You' : 'Hermes'}</div><div class="msg-body${role === 'assistant' ? ' md' : ''}">${bodyHtml}</div>`;
   container.appendChild(div);
+  if (role === 'assistant') addCodeCopyBtns(div);
 }
 
+let _streamRenderTimer = null;
 function showStreamingUI() {
   hideEmpty();
   const div = document.createElement('div');
   div.className = 'msg assistant streaming'; div.id = 'streamingMsg';
-  div.innerHTML = '<div class="msg-label">Hermes</div><div class="msg-body" id="streamBody"></div>';
+  div.innerHTML = '<div class="msg-label">Hermes</div><div class="msg-body md" id="streamBody"></div>';
   $('messages').appendChild(div); scrollBottom();
 }
 
 // ── UI helpers ──
 
+const _loadSteps = [
+  { id: 'alloc',   text: 'Allocating process' },
+  { id: 'load',    text: 'Loading sessions' },
+  { id: 'ws',      text: 'Connecting WebSocket' },
+  { id: 'model',   text: 'Loading model info' },
+  { id: 'resume',  text: 'Resuming session' },
+];
+let _loadIdx = 0;
+
+function showLoading(stepId) {
+  const wScreen = $('welcomeScreen');
+  const ov = $('loadingOverlay');
+  if (wScreen) wScreen.style.display = 'none';
+  if (ov) ov.style.display = 'flex';
+
+  // Mark previous step as done
+  if (_loadIdx > 0) {
+    const prev = $('step_' + _loadSteps[_loadIdx - 1].id);
+    if (prev) { prev.className = 'loading-step done'; prev.querySelector('.step-icon').innerHTML = '\u2713'; }
+  }
+
+  // Find current step
+  const idx = _loadSteps.findIndex(s => s.id === stepId);
+  if (idx >= 0) _loadIdx = idx + 1;
+
+  // Build steps HTML
+  const container = $('loadingSteps');
+  if (container) {
+    let html = '';
+    for (let i = 0; i < _loadSteps.length; i++) {
+      const s = _loadSteps[i];
+      const isDone = i < _loadIdx - 1;
+      const isActive = i === _loadIdx - 1;
+      const cls = isDone ? 'done' : isActive ? 'active' : '';
+      const icon = isDone ? '\u2713' : isActive ? '\u25CF' : '\u25CB';
+      html += '<div class="loading-step ' + cls + '" id="step_' + s.id + '"><span class="step-icon' + (isDone ? ' check' : '') + '">' + icon + '</span>' + s.text + '</div>';
+    }
+    container.innerHTML = html;
+  }
+}
+
+function hideLoading() {
+  // Mark last step done
+  if (_loadIdx > 0) {
+    const last = $('step_' + _loadSteps[_loadIdx - 1].id);
+    if (last && !last.classList.contains('done')) {
+      last.className = 'loading-step done'; last.querySelector('.step-icon').innerHTML = '\u2713';
+    }
+  }
+  _loadIdx = 0;
+  setTimeout(() => {
+    const ov = $('loadingOverlay');
+    if (ov) ov.style.display = 'none';
+  }, 300);
+}
+
 function setConn(state) {
   const dot = $('connDot');
   const label = $('connLabel');
   if (!dot) return;
-  // Update header
   const header = dot.parentElement;
-  if (state === 'connected') { dot.className = 'conn-dot ok'; if (header) header.innerHTML = '<span class="conn-dot ok" id="connDot"></span><span class="conn-label" id="connLabel">已连接</span>'; }
-  else if (state === 'connecting') { if (header) header.innerHTML = '<span class="conn-dot" id="connDot"></span><span class="conn-label" id="connLabel">连接中…</span>'; $('btnConnect').disabled = true; }
-  else if (state === 'error') { if (header) header.innerHTML = '<span class="conn-dot" id="connDot"></span><span class="conn-label" id="connLabel">未连接</span>'; $('btnConnect').disabled = false; }
-  else { if (header) header.innerHTML = '<span class="conn-dot" id="connDot"></span><span class="conn-label" id="connLabel">未连接</span>'; $('btnConnect').disabled = false; }
+  const btn = $('btnConnect');
+  if (state === 'connected') { dot.className = 'conn-dot ok'; if (header) header.innerHTML = '<span class="conn-dot ok" id="connDot"></span><span class="conn-label" id="connLabel">Connected</span>'; }
+  else if (state === 'connecting') { if (header) header.innerHTML = '<span class="conn-dot" id="connDot"></span><span class="conn-label" id="connLabel">Connecting\u2026</span>'; if (btn) btn.disabled = true; }
+  else if (state === 'error') { if (header) header.innerHTML = '<span class="conn-dot" id="connDot"></span><span class="conn-label" id="connLabel">Disconnected</span>'; if (btn) btn.disabled = false; $('welcomeScreen').style.display = 'flex'; }
+  else { if (header) header.innerHTML = '<span class="conn-dot" id="connDot"></span><span class="conn-label" id="connLabel">Disconnected</span>'; if (btn) btn.disabled = false; }
 }
 
 function enableInput() {
   if (isConvStreaming(activeConvId)) return;
   $('input').disabled = false; $('sendBtn').disabled = false;
   $('attachBtn').disabled = false; $('undoBtn').disabled = false;
+  const tb = $('thinkingBar'); if (tb) tb.style.display = 'none';
   if (activeConvId) $('input').focus();
 }
 
 function disableInput() {
   $('input').disabled = true; $('sendBtn').disabled = true;
   $('attachBtn').disabled = true; $('undoBtn').disabled = true;
+  const tb = $('thinkingBar');
+  if (tb && activeConvId) {
+    tb.style.display = 'flex';
+    const tt = $('thinkingText');
+    if (tt) tt.textContent = isConvStreaming(activeConvId) ? 'Hermes is responding\u2026' : 'Hermes is thinking\u2026';
+  }
+}
+
+function showToolThinking(toolName) {
+  const tb = $('thinkingBar');
+  if (tb) {
+    tb.style.display = 'flex';
+    const tt = $('thinkingText');
+    if (tt) tt.textContent = 'Running: ' + toolName;
+  }
 }
 
 function hideEmpty() { const e = $('emptyState'); if (e) e.style.display = 'none'; }
@@ -1277,8 +1763,9 @@ function addUserMsg(text) {
 function addAssistantMsg(text) {
   hideEmpty();
   const div = document.createElement('div'); div.className = 'msg assistant';
-  div.innerHTML = `<div class="msg-label">Hermes</div><div class="msg-body">${esc(text)}</div>`;
-  $('messages').appendChild(div); scrollBottom();
+  div.innerHTML = `<div class="msg-label">Hermes</div><div class="msg-body md">${renderMd(text)}</div>`;
+  $('messages').appendChild(div);
+  addCodeCopyBtns(div); scrollBottom();
 }
 
 function addSystemMsg(text) {
@@ -1291,6 +1778,42 @@ function addSystemMsg(text) {
 function scrollBottom() { const m = $('messages'); m.scrollTop = m.scrollHeight; }
 
 function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+// ── Markdown rendering ──
+let _mdReady = typeof marked !== 'undefined';
+if (_mdReady) {
+  marked.setOptions({
+    highlight: function(code, lang) {
+      if (typeof hljs !== 'undefined' && lang && hljs.getLanguage(lang)) {
+        try { return hljs.highlight(code, { language: lang }).value; } catch(e) {}
+      }
+      if (typeof hljs !== 'undefined') { try { return hljs.highlightAuto(code).value; } catch(e) {} }
+      return code;
+    },
+    breaks: true,
+    gfm: true,
+  });
+}
+
+function renderMd(text) {
+  if (!_mdReady) return esc(text);
+  try { return marked.parse(text); } catch(e) { return esc(text); }
+}
+
+function addCodeCopyBtns(container) {
+  container.querySelectorAll('pre code').forEach(codeEl => {
+    const pre = codeEl.parentElement;
+    if (!pre || pre.querySelector('.md-code-copy')) return;
+    const btn = document.createElement('button');
+    btn.className = 'md-code-copy';
+    btn.textContent = 'Copy';
+    btn.onclick = () => {
+      navigator.clipboard.writeText(codeEl.textContent).then(() => { btn.textContent = 'Copied'; setTimeout(() => btn.textContent = 'Copy', 1500); });
+    };
+    pre.style.position = 'relative';
+    pre.appendChild(btn);
+  });
+}
 
 // ── Settings (nav + content overlay) ──
 
@@ -1311,7 +1834,7 @@ function switchNav(section) {
   document.querySelectorAll('.snav-item').forEach(b => b.classList.toggle('active', b.dataset.nav === section));
   $('settingsTitle').textContent = _navTitles[section] || section;
   const body = $('settingsBody');
-  body.innerHTML = '<div class="settings-loading">加载中…</div>';
+  body.innerHTML = '<div class="settings-loading">Loading…</div>';
   if (section === 'model') loadSettingsModel();
   else if (section === 'usage') loadSettingsUsage();
   else if (section === 'skills') loadSettingsSkills();
@@ -1326,21 +1849,29 @@ async function loadSettingsModel() {
       hermesHTTP('GET', '/api/model/options').catch(() => null)
     ]);
     const cap = info.capabilities || {};
-    const modelOpts = options?.models || (Array.isArray(options) ? options : []);
-    let optHtml = `<option value="${esc(info.model)}" selected>${esc(info.model)}</option>`;
-    for (const m of modelOpts) {
-      const name = typeof m === 'string' ? m : (m.model || m.name || '');
-      if (name && name !== info.model) optHtml += `<option value="${esc(name)}">${esc(name)}</option>`;
+
+    // Build provider-grouped model list
+    let optHtml = `<option value="${esc(info.provider)}|${esc(info.model)}" selected>${esc(info.model)} (${esc(info.provider || '?')})</option>`;
+    const providers = options?.providers || [];
+    for (const p of providers) {
+      const slug = p.slug || '';
+      const models = p.models || [];
+      for (const m of models) {
+        const name = typeof m === 'string' ? m : (m.model || m.name || '');
+        if (name === info.model && slug === info.provider) continue;
+        optHtml += `<option value="${esc(slug)}|${esc(name)}">${esc(name)} (${esc(p.name || slug)})</option>`;
+      }
     }
+
     body.innerHTML = `
       <div class="s-card">
-        <div class="s-card-title">当前模型</div>
-        <div class="s-row" style="margin-bottom:8px"><span class="s-row-label">模型</span>
+        <div class="s-card-title">Current Model</div>
+        <div class="s-row" style="margin-bottom:8px"><span class="s-row-label">Model</span>
           <select class="s-select" onchange="settingsSwitchModel(this.value)">${optHtml}</select>
         </div>
       </div>
       <div class="s-card">
-        <div class="s-card-title">模型能力</div>
+        <div class="s-card-title">Capabilities</div>
         <div class="s-row"><span class="s-row-label">Provider</span><span class="s-row-value">${esc(info.provider || '-')}</span></div>
         <div class="s-row"><span class="s-row-label">Context</span><span class="s-row-value">${fmtTokens(cap.context_window || info.effective_context_length || 0)}</span></div>
         <div class="s-row"><span class="s-row-label">Max Output</span><span class="s-row-value">${fmtTokens(cap.max_output_tokens || 0)}</span></div>
@@ -1348,9 +1879,50 @@ async function loadSettingsModel() {
         <div class="s-row"><span class="s-row-label">Vision</span><span class="s-row-value">${cap.supports_vision ? '&#10003;' : '&#10007;'}</span></div>
         <div class="s-row"><span class="s-row-label">Reasoning</span><span class="s-row-value">${cap.supports_reasoning ? '&#10003;' : '&#10007;'}</span></div>
         <div class="s-row"><span class="s-row-label">Family</span><span class="s-row-value">${esc(cap.model_family || '-')}</span></div>
+      </div>
+      <div class="s-card" id="customModelCard">
+        <div class="s-card-title" style="cursor:pointer;display:flex;align-items:center;justify-content:space-between" onclick="toggleCustomModelForm()">
+          <span>Add Custom Model</span>
+          <span id="cmToggleIcon" style="font-size:16px;transition:transform .2s">&#9654;</span>
+        </div>
+        <div id="customModelForm" style="display:none;margin-top:8px">
+          <div style="margin-bottom:8px">
+            <label style="font-size:11px;color:var(--text-dim);display:block;margin-bottom:3px">Provider Name</label>
+            <input id="cmName" class="s-input" placeholder="e.g. My OpenAI">
+          </div>
+          <div style="margin-bottom:8px">
+            <label style="font-size:11px;color:var(--text-dim);display:block;margin-bottom:3px">Base URL</label>
+            <input id="cmBaseUrl" class="s-input" placeholder="e.g. https://api.openai.com/v1">
+          </div>
+          <div style="margin-bottom:8px">
+            <label style="font-size:11px;color:var(--text-dim);display:block;margin-bottom:3px">API Key</label>
+            <input id="cmApiKey" class="s-input" type="password" placeholder="sk-...">
+          </div>
+          <div style="margin-bottom:8px">
+            <label style="font-size:11px;color:var(--text-dim);display:block;margin-bottom:3px">Model Name</label>
+            <input id="cmModel" class="s-input" placeholder="e.g. gpt-4o">
+          </div>
+          <div style="margin-bottom:8px">
+            <label style="font-size:11px;color:var(--text-dim);display:block;margin-bottom:3px">API Mode</label>
+            <select id="cmApiMode" class="s-select">
+              <option value="">Auto-detect</option>
+              <option value="openai">OpenAI Compatible</option>
+              <option value="anthropic">Anthropic Compatible</option>
+            </select>
+          </div>
+          <div style="margin-bottom:8px">
+            <label style="font-size:11px;color:var(--text-dim);display:block;margin-bottom:3px">Context Length (tokens, 0 = auto)</label>
+            <input id="cmContext" class="s-input" type="number" placeholder="0" value="0">
+          </div>
+          <div style="display:flex;gap:8px;margin-top:10px">
+            <button class="btn btn-primary" style="flex:1" onclick="addCustomModel()">Add Model</button>
+            <button class="btn" style="flex:1" onclick="toggleCustomModelForm()">Cancel</button>
+          </div>
+          <div id="cmMsg" style="margin-top:8px;font-size:12px;display:none"></div>
+        </div>
       </div>`;
   } catch(e) {
-    body.innerHTML = '<div style="color:var(--danger);padding:20px">加载失败: ' + esc(e.message) + '</div>';
+    body.innerHTML = '<div style="color:var(--danger);padding:20px">Load failed: ' + esc(e.message) + '</div>';
   }
 }
 
@@ -1367,9 +1939,33 @@ async function loadSettingsUsage() {
         totalCost += parseFloat(e.estimated_cost_usd || 0);
       }
     }
+
+    // Build SVG bar chart
+    let chartSvg = '';
+    if (Array.isArray(entries) && entries.length > 0) {
+      const maxVal = Math.max(...entries.map(e => (e.input_tokens||0) + (e.output_tokens||0)), 1);
+      const barW = Math.max(Math.min(400 / entries.length, 20), 4);
+      const chartW = entries.length * barW;
+      const chartH = 120;
+      let bars = '';
+      entries.forEach((e, i) => {
+        const inH = Math.round((e.input_tokens||0) / maxVal * chartH);
+        const outH = Math.round((e.output_tokens||0) / maxVal * chartH);
+        const x = i * barW;
+        bars += `<rect x="${x}" y="${chartH - inH - outH}" width="${barW-1}" height="${inH}" fill="var(--accent)" rx="1"/>`;
+        if (outH > 0) bars += `<rect x="${x}" y="${chartH - outH}" width="${barW-1}" height="${outH}" fill="var(--accent-dim)" rx="1"/>`;
+      });
+      chartSvg = `<div class="s-card"><div class="s-card-title">Token Usage (30 Days)</div>
+        <svg class="usage-chart" viewBox="0 0 ${chartW} ${chartH}" preserveAspectRatio="none">${bars}</svg>
+        <div class="chart-legend"><span><span class="legend-dot" style="background:var(--accent)"></span>Input</span><span><span class="legend-dot" style="background:var(--accent-dim)"></span>Output</span></div>
+      </div>`;
+    }
+
+    // Detail rows in reverse order (newest first)
     let detailRows = '';
     if (Array.isArray(entries)) {
-      for (const e of entries) {
+      const reversed = [...entries].reverse();
+      for (const e of reversed) {
         detailRows += `<tr>
           <td>${esc(e.date || e.day || '-')}</td>
           <td>${fmtTokens(e.input_tokens || 0)}</td>
@@ -1379,50 +1975,94 @@ async function loadSettingsUsage() {
         </tr>`;
       }
     }
+
     body.innerHTML = `
+      ${chartSvg}
       <div class="s-card">
-        <div class="s-card-title">30 天汇总</div>
+        <div class="s-card-title">30-Day Summary</div>
         <div class="s-row"><span class="s-row-label">Input Tokens</span><span class="s-row-value">${fmtTokens(totalIn)}</span></div>
         <div class="s-row"><span class="s-row-label">Output Tokens</span><span class="s-row-value">${fmtTokens(totalOut)}</span></div>
-        <div class="s-row"><span class="s-row-label">预估费用</span><span class="s-row-value">$${totalCost.toFixed(4)}</span></div>
+        <div class="s-row"><span class="s-row-label">Estimated Cost</span><span class="s-row-value">$${totalCost.toFixed(4)}</span></div>
       </div>
       ${detailRows ? `<div class="s-card">
-        <div class="s-card-title">每日明细</div>
-        <table class="usage-table"><tr><th>日期</th><th>输入</th><th>输出</th><th>会话</th><th>费用</th></tr>${detailRows}</table>
+        <div class="s-card-title">Daily Breakdown</div>
+        <table class="usage-table"><tr><th>Date</th><th>Input</th><th>Output</th><th>Sessions</th><th>Cost</th></tr>${detailRows}</table>
       </div>` : ''}`;
   } catch(e) {
-    body.innerHTML = '<div style="color:var(--danger);padding:20px">加载失败: ' + esc(e.message) + '</div>';
+    body.innerHTML = '<div style="color:var(--danger);padding:20px">Load failed: ' + esc(e.message) + '</div>';
   }
 }
 
-async function loadSettingsSkills() {
+async function loadSettingsSkills(highlight) {
   const body = $('settingsBody');
+  body.innerHTML = '<div class="settings-loading">Loading\u2026</div>';
   try {
     const skills = await hermesHTTP('GET', '/api/skills');
     const list = Array.isArray(skills) ? skills : (skills.skills || []);
-    let html = `
-      <div class="s-card">
-        <div class="s-card-title">技能管理</div>
-        <div class="skill-search">
-          <input id="skillSearchInput" placeholder="搜索技能…" onkeydown="if(event.key==='Enter')searchSkills()">
-          <button onclick="searchSkills()">搜索</button>
-        </div>
-        <div class="skill-search">
-          <input id="skillInstallInput" placeholder="安装技能（名称）">
-          <button onclick="installSkill()">安装</button>
-        </div>`;
-    for (const s of list) {
-      html += `<div class="skill-item">
-        <div class="skill-info"><div class="skill-name">${esc(s.name)}</div><div class="skill-desc">${esc(s.description || '')}</div></div>
-        <label class="toggle"><input type="checkbox" ${s.enabled ? 'checked' : ''} onchange="toggleSkill('${esc(s.name)}',this.checked)"><span class="toggle-slider"></span></label>
-      </div>`;
-    }
-    if (list.length === 0) html += '<div class="s-empty">暂无技能</div>';
+    // Sort: highlighted skill first, then enabled, then disabled
+    const sorted = [...list].sort((a, b) => {
+      if (a.name === highlight) return -1;
+      if (b.name === highlight) return 1;
+      if (a.enabled !== b.enabled) return a.enabled ? -1 : 1;
+      return 0;
+    });
+    const enabledCount = list.filter(s => s.enabled).length;
+    const disabledCount = list.length - enabledCount;
+
+    let html = '<div class="s-card"><div class="s-card-title">Search & Install</div>';
+    html += '<div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">Search from Hermes ACP Registry (hermes.acp.community) for community skills, agents, and integrations.</div>';
+    html += '<div class="skill-search">';
+    html += '<input id="skillSearchInput" placeholder="Search skills to install\u2026" onkeydown="if(event.key===\'Enter\'&&!event.isComposing)searchSkills()">';
+    html += '<button type="button" onclick="searchSkills()">Search</button>';
+    html += '</div>';
     html += '<div id="skillSearchResults"></div></div>';
+
+    html += '<div class="s-card"><div class="s-card-title">Installed Skills (' + list.length + ')</div>';
+    if (list.length === 0) {
+      html += '<div class="s-empty">No skills installed</div>';
+    } else {
+      html += '<div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">' + enabledCount + ' enabled, ' + disabledCount + ' disabled</div>';
+      html += '<div class="skill-search" style="margin-bottom:10px"><input id="installedSkillFilter" placeholder="Filter installed skills\u2026" oninput="filterInstalledSkills()"></div>';
+      html += '<div id="installedSkillList">';
+      for (const s of sorted) {
+        const isNew = s.name === highlight;
+        let itemStyle = isNew ? 'border-color:var(--success);background:#f0fdf4' : (!s.enabled ? 'opacity:0.6' : '');
+        html += `<div class="skill-item" data-skill-name="${esc(s.name.toLowerCase())}" data-skill-desc="${esc((s.description||'').toLowerCase())}" ${itemStyle ? 'style="' + itemStyle + '"' : ''}>
+          <div class="skill-info"><div class="skill-name">${esc(s.name)}${isNew ? ' <span style="color:var(--success);font-size:11px">\u2713 Installed</span>' : ''}</div><div class="skill-desc">${esc(s.description || '')}</div></div>
+          <label class="toggle"><input type="checkbox" ${s.enabled ? 'checked' : ''} onchange="toggleSkill('${esc(s.name)}',this.checked)"><span class="toggle-slider"></span></label>
+        </div>`;
+      }
+      html += '</div>';
+    }
+    html += '</div>';
+
     body.innerHTML = html;
   } catch(e) {
-    body.innerHTML = '<div style="color:var(--danger);padding:20px">加载失败: ' + esc(e.message) + '</div>';
+    body.innerHTML = '<div style="color:var(--danger);padding:20px">Load failed: ' + esc(e.message) + '</div>';
   }
+}
+
+function humanizeSchedule(s) {
+  if (!s) return '-';
+  if (typeof s !== 'string') s = String(s);
+  const p = s.trim().split(/\s+/);
+  if (p.length !== 5) return s;
+  const [min, hour, dom, mon, dow] = p;
+  const days = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  // Every N minutes
+  if (min.startsWith('*/') && hour === '*' && dom === '*' && mon === '*' && dow === '*') return 'Every ' + min.slice(2) + ' min';
+  // Hourly
+  if (min !== '*' && hour === '*' && dom === '*' && mon === '*' && dow === '*') return 'Hourly at :' + min.padStart(2, '0');
+  // Every N hours
+  if (min !== '*' && hour.startsWith('*/') && dom === '*' && mon === '*' && dow === '*') return 'Every ' + hour.slice(2) + ' hours at :' + min.padStart(2, '0');
+  // Daily
+  if (min !== '*' && hour !== '*' && dom === '*' && mon === '*' && dow === '*') return 'Daily at ' + hour.padStart(2, '0') + ':' + min.padStart(2, '0');
+  // Weekly
+  if (min !== '*' && hour !== '*' && dom === '*' && mon === '*' && dow !== '*') {
+    const dName = dow.startsWith('*/') ? 'every ' + dow.slice(2) + ' days' : (days[parseInt(dow)] || dow);
+    return dName + ' at ' + hour.padStart(2, '0') + ':' + min.padStart(2, '0');
+  }
+  return s;
 }
 
 async function loadSettingsCron() {
@@ -1432,41 +2072,111 @@ async function loadSettingsCron() {
     const jobs = Array.isArray(data) ? data : (data.jobs || []);
     let html = `
       <div class="s-card">
-        <div class="s-card-title">定时任务</div>
-        <button class="btn btn-primary" style="margin-bottom:12px;max-width:140px" onclick="showCronForm()">+ 新建任务</button>
+        <div class="s-card-title">Scheduled Tasks</div>
+        <button class="btn btn-primary" style="margin-bottom:12px;max-width:140px" onclick="showCronForm()">+ New Task</button>
         <div id="cronFormArea"></div>`;
     for (const j of jobs) {
       const paused = j.paused || j.status === 'paused';
       html += `<div class="cron-item">
         <div class="cron-header">
-          <span class="cron-name">${esc(j.name || j.id || '未命名')}</span>
+          <span class="cron-name">${esc(j.name || j.id || 'Untitled')}${paused ? ' <span style="color:var(--text-dim);font-weight:400;font-size:11px">(paused)</span>' : ''}</span>
           <div class="cron-actions">
             ${paused
-              ? `<button class="cron-btn" onclick="cronAction('${esc(j.id)}','resume')">恢复</button>`
-              : `<button class="cron-btn" onclick="cronAction('${esc(j.id)}','pause')">暂停</button>`}
-            <button class="cron-btn" onclick="cronAction('${esc(j.id)}','trigger')">触发</button>
-            <button class="cron-btn danger" onclick="cronAction('${esc(j.id)}','delete')">删除</button>
+              ? `<button class="cron-btn" onclick="cronAction('${esc(j.id)}','resume')">Resume</button>`
+              : `<button class="cron-btn" onclick="cronAction('${esc(j.id)}','pause')">Pause</button>`}
+            <button class="cron-btn" onclick="cronAction('${esc(j.id)}','trigger')">Trigger</button>
+            <button class="cron-btn danger" onclick="cronAction('${esc(j.id)}','delete')">Delete</button>
           </div>
         </div>
-        <div class="cron-schedule">${esc(j.schedule || j.cron || '-')}</div>
+        <div class="cron-schedule">${esc(humanizeSchedule(j.schedule || j.cron))}</div>
         <div class="cron-prompt">${esc(j.prompt || '')}</div>
       </div>`;
     }
-    if (jobs.length === 0) html += '<div class="s-empty">暂无定时任务</div>';
+    if (jobs.length === 0) html += '<div class="s-empty">No scheduled tasks</div>';
     html += '</div>';
     body.innerHTML = html;
   } catch(e) {
-    body.innerHTML = '<div style="color:var(--danger);padding:20px">加载失败: ' + esc(e.message) + '</div>';
+    body.innerHTML = '<div style="color:var(--danger);padding:20px">Load failed: ' + esc(e.message) + '</div>';
   }
 }
 
-async function settingsSwitchModel(model) {
+async function settingsSwitchModel(val) {
   try {
-    await hermesHTTP('POST', '/api/model/set', { scope: 'main', model });
+    const [provider, model] = val.split('|');
+    await hermesHTTP('POST', '/api/model/set', { scope: 'main', provider, model });
     currentModel = model;
-    addSystemMsg('模型已切换为 ' + model);
+    addSystemMsg('Model switched to ' + model);
+    loadSettingsModel();
   } catch (e) {
-    addSystemMsg('切换失败: ' + e.message);
+    addSystemMsg('Switch failed: ' + e.message);
+  }
+}
+
+function toggleCustomModelForm() {
+  const form = $('customModelForm');
+  const icon = $('cmToggleIcon');
+  if (!form) return;
+  const open = form.style.display !== 'none';
+  form.style.display = open ? 'none' : 'block';
+  if (icon) icon.style.transform = open ? '' : 'rotate(90deg)';
+}
+
+async function addCustomModel() {
+  const name = $('cmName')?.value?.trim();
+  const baseUrl = $('cmBaseUrl')?.value?.trim();
+  const apiKey = $('cmApiKey')?.value?.trim();
+  const model = $('cmModel')?.value?.trim();
+  const apiMode = $('cmApiMode')?.value || '';
+  const contextLen = parseInt($('cmContext')?.value || '0') || 0;
+  const msg = $('cmMsg');
+
+  if (!name || !baseUrl || !model) {
+    if (msg) { msg.style.display = 'block'; msg.style.color = 'var(--danger)'; msg.textContent = 'Provider Name, Base URL, and Model Name are required.'; }
+    return;
+  }
+
+  if (msg) { msg.style.display = 'block'; msg.style.color = 'var(--text-dim)'; msg.textContent = 'Saving\u2026'; }
+
+  try {
+    // Read current config
+    const cfg = await hermesHTTP('GET', '/api/config');
+    let providers = cfg.custom_providers || [];
+    if (!Array.isArray(providers)) providers = [];
+
+    // Build entry
+    const entry = { name, base_url: baseUrl, model };
+    if (apiKey) entry.api_key = apiKey;
+    if (apiMode) entry.api_mode = apiMode;
+    if (contextLen > 0) entry.models = { [model]: { context_length: contextLen } };
+
+    // Check for duplicate by base_url — update if exists
+    let updated = false;
+    for (let i = 0; i < providers.length; i++) {
+      if (providers[i].base_url?.replace(/\/+$/, '') === baseUrl.replace(/\/+$/, '')) {
+        providers[i] = { ...providers[i], ...entry };
+        updated = true;
+        break;
+      }
+    }
+    if (!updated) providers.push(entry);
+
+    cfg.custom_providers = providers;
+    await hermesHTTP('PUT', '/api/config', { config: cfg });
+
+    if (msg) { msg.style.color = 'var(--success)'; msg.textContent = 'Custom model "' + name + '" saved. It will appear in the model dropdown above.'; }
+    addSystemMsg('Custom model "' + name + '" added successfully');
+
+    // Clear form
+    const fields = ['cmName', 'cmBaseUrl', 'cmApiKey', 'cmModel'];
+    fields.forEach(id => { const el = $(id); if (el) el.value = ''; });
+    const ctxEl = $('cmContext'); if (ctxEl) ctxEl.value = '0';
+    const modeEl = $('cmApiMode'); if (modeEl) modeEl.selectedIndex = 0;
+
+    // Refresh model dropdown
+    setTimeout(() => loadSettingsModel(), 500);
+  } catch (e) {
+    if (msg) { msg.style.color = 'var(--danger)'; msg.textContent = 'Failed: ' + e.message; }
+    addSystemMsg('Add custom model failed: ' + e.message);
   }
 }
 
@@ -1474,29 +2184,60 @@ async function toggleSkill(name, enabled) {
   try {
     await hermesHTTP('PUT', '/api/skills/toggle', { name, enabled });
   } catch (e) {
-    addSystemMsg('切换技能失败: ' + e.message);
+    addSystemMsg('Toggle failed: ' + e.message);
+  }
+}
+
+function filterInstalledSkills() {
+  const q = ($('installedSkillFilter')?.value || '').toLowerCase().trim();
+  const items = document.querySelectorAll('#installedSkillList .skill-item');
+  for (const el of items) {
+    if (!q) { el.style.display = ''; continue; }
+    const name = el.dataset.skillName || '';
+    const desc = el.dataset.skillDesc || '';
+    el.style.display = (name.includes(q) || desc.includes(q)) ? '' : 'none';
   }
 }
 
 async function searchSkills() {
   const q = $('skillSearchInput')?.value?.trim();
-  if (!q || !ws || ws.readyState !== WebSocket.OPEN) return;
+  const area = $('skillSearchResults');
+  if (!q) { if (area) area.innerHTML = '<div class="s-empty">Enter a keyword to search</div>'; return; }
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    if (area) area.innerHTML = '<div class="s-empty" style="color:var(--danger)">WebSocket not connected</div>';
+    return;
+  }
+  if (area) area.innerHTML = '<div class="s-empty">Searching for "' + esc(q) + '"\u2026</div>';
   try {
-    const r = await rpc('skills.manage', { action: 'search', query: q });
+    // Get installed skills for comparison
+    const installed = new Set();
+    try {
+      const sk = await hermesHTTP('GET', '/api/skills');
+      const list = Array.isArray(sk) ? sk : (sk.skills || []);
+      for (const s of list) installed.add(s.name);
+    } catch(e) {}
+
+    const r = await rpc('skills.manage', { action: 'search', query: q }, 10000);
     const results = r.results || [];
     let html = '';
     if (results.length === 0) {
-      html = '<div class="s-empty">无结果</div>';
+      html = '<div class="s-empty">No results for "' + esc(q) + '"</div>';
     } else {
+      html += '<div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">' + results.length + ' results</div>';
       for (const s of results) {
-        html += `<div class="skill-item">
-          <div class="skill-info"><div class="skill-name">${esc(s.name)}</div><div class="skill-desc">${esc(s.description || '')}</div></div>
-          <button class="cron-btn" style="border-color:var(--accent);color:var(--accent)" onclick="installSkillByName('${esc(s.name)}')">安装</button>
+        const isInstalled = installed.has(s.name);
+        html += `<div class="skill-item" ${isInstalled ? 'style="background:var(--bg)"' : ''}>
+          <div class="skill-info" onclick="inspectSkill('${esc(s.name)}')"><div class="skill-name">${esc(s.name)}${isInstalled ? ' <span style="font-size:11px;color:var(--success)">\u2713 Installed</span>' : ''}</div><div class="skill-desc">${esc(s.description || '')}</div></div>
+          ${isInstalled
+            ? '<span style="font-size:12px;color:var(--success);white-space:nowrap">Installed</span>'
+            : '<button class="cron-btn" style="border-color:var(--accent);color:var(--accent)" onclick="event.stopPropagation();installSkillByName(\'' + esc(s.name) + '\')">Install</button>'}
         </div>`;
       }
     }
-    $('skillSearchResults').innerHTML = html;
-  } catch (e) { addSystemMsg('搜索失败: ' + e.message); }
+    if (area) area.innerHTML = html;
+  } catch (e) {
+    if (area) area.innerHTML = '<div class="s-empty" style="color:var(--danger)">Search failed: ' + esc(e.message) + '</div>';
+  }
 }
 
 async function installSkill() {
@@ -1504,56 +2245,208 @@ async function installSkill() {
   if (q) await installSkillByName(q);
 }
 
-async function installSkillByName(name) {
-  if (!ws || ws.readyState !== WebSocket.OPEN) { addSystemMsg('WS 未连接'); return; }
+async function inspectSkill(name) {
+  const modal = $('skillDetailModal');
+  if (!modal) return;
+  modal.innerHTML = '<div class="skill-detail" onclick="if(event.target===this)this.remove()"><div class="skill-detail-card" style="position:relative"><div style="text-align:center;padding:30px;color:var(--text-dim)">Loading...</div></div></div>';
   try {
-    const r = await rpc('skills.manage', { action: 'install', query: name });
-    addSystemMsg('技能已安装: ' + (r.name || name));
-    loadSettingsSkills();
-  } catch (e) { addSystemMsg('安装失败: ' + e.message); }
+    const r = await rpc('skills.manage', { action: 'inspect', query: name }, 8000);
+    const info = r.info || r;
+    const author = esc(info.author || info.maintainer || '');
+    const desc = esc(info.description || '');
+    const readme = esc(info.readme || info.long_description || '');
+    const tags = info.tags || info.categories || [];
+    const version = esc(info.version || '');
+    const homepage = info.homepage || info.url || '';
+    let html = '<div class="skill-detail" onclick="if(event.target===this)this.remove()"><div class="skill-detail-card" style="position:relative">';
+    html += '<button class="sd-close" onclick="this.closest(\'.skill-detail\').remove()">\u2715</button>';
+    html += '<h2>' + esc(name) + '</h2>';
+    if (version) html += '<span class="sd-tag" style="margin-bottom:12px">v' + version + '</span> ';
+    if (author) html += '<div class="sd-author">by ' + author + '</div>';
+    else html += '<div style="height:8px"></div>';
+    if (desc) html += '<div class="sd-section"><div class="sd-label">Description</div><div class="sd-text">' + desc + '</div></div>';
+    if (readme && readme !== desc) html += '<div class="sd-section"><div class="sd-label">README</div><div class="sd-text" style="max-height:200px;overflow-y:auto">' + readme + '</div></div>';
+    if (tags.length > 0) {
+      html += '<div class="sd-section"><div class="sd-label">Tags</div><div class="sd-tags">';
+      for (const t of tags) html += '<span class="sd-tag">' + esc(typeof t === 'string' ? t : t.name || '') + '</span>';
+      html += '</div></div>';
+    }
+    if (homepage) html += '<div class="sd-section"><div class="sd-label">Homepage</div><a href="' + esc(homepage) + '" target="_blank" style="font-size:13px;color:var(--accent);word-break:break-all">' + esc(homepage) + '</a></div>';
+    html += '<div class="sd-actions"><button class="btn btn-primary" onclick="installSkillByName(\'' + esc(name) + '\');this.closest(\'.skill-detail\').remove()">Install</button>';
+    html += '<button class="btn" onclick="this.closest(\'.skill-detail\').remove()">Close</button></div>';
+    html += '</div></div>';
+    modal.innerHTML = html;
+  } catch (e) {
+    modal.innerHTML = '<div class="skill-detail" onclick="if(event.target===this)this.remove()"><div class="skill-detail-card"><div style="color:var(--danger);padding:20px">Failed to load: ' + esc(e.message) + '</div><button class="btn" onclick="this.closest(\'.skill-detail\').remove()">Close</button></div></div>';
+  }
 }
 
+async function installSkillByName(name) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    addSystemMsg('WS not connected'); return;
+  }
+  // Find the clicked button and show loading state
+  const btns = document.querySelectorAll('.cron-btn, .btn-primary');
+  let btn = null;
+  for (const b of btns) {
+    if (b.textContent.trim() === 'Install' && b.closest('.skill-item, .sd-actions')) { btn = b; break; }
+  }
+  if (btn) { btn.disabled = true; btn.textContent = 'Installing...'; }
+  try {
+    const r = await rpc('skills.manage', { action: 'install', query: name }, 30000);
+    addSystemMsg('Skill installed: ' + (r.name || name));
+    loadSettingsSkills(r.name || name);
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = 'Install'; }
+    addSystemMsg('Install failed: ' + e.message);
+  }
+}
+
+let _cronFreq = 'daily';
 function showCronForm() {
+  _cronFreq = 'daily';
   $('cronFormArea').innerHTML = `
     <div class="cron-form">
-      <input id="cronName" placeholder="任务名称">
-      <input id="cronSchedule" placeholder="定时表达式（如: 0 9 * * *）">
-      <input id="cronPrompt" placeholder="执行内容 (prompt)">
-      <select id="cronDeliver"><option value="default">默认投递</option><option value="silent">静默</option></select>
+      <input id="cronName" placeholder="Task name">
+      <label style="font-size:11px;color:var(--text-dim)">Frequency</label>
+      <div class="cron-freq-btns">
+        <button class="cron-freq-btn active" onclick="setCronFreq('every-n-min',this)">Every N min</button>
+        <button class="cron-freq-btn" onclick="setCronFreq('hourly',this)">Hourly</button>
+        <button class="cron-freq-btn" onclick="setCronFreq('daily',this)">Daily</button>
+        <button class="cron-freq-btn" onclick="setCronFreq('weekly',this)">Weekly</button>
+        <button class="cron-freq-btn" onclick="setCronFreq('custom',this)">Custom</button>
+      </div>
+      <div id="cronFreqFields"></div>
+      <label style="font-size:11px;color:var(--text-dim)">Prompt</label>
+      <textarea id="cronPrompt" placeholder="What should Hermes do? e.g. Summarize today's key news about AI"></textarea>
+      <div style="font-size:11px;color:var(--text-dim)" id="cronPreview"></div>
       <div class="cron-form-actions">
-        <button class="btn btn-primary" onclick="createCronJob()">创建</button>
-        <button class="btn" style="background:var(--border)" onclick="$('cronFormArea').innerHTML=''">取消</button>
+        <button class="btn btn-primary" onclick="createCronJob()">Create</button>
+        <button class="btn" style="background:var(--border)" onclick="$('cronFormArea').innerHTML=''">Cancel</button>
       </div>
     </div>`;
+  setCronFreq('daily');
+}
+
+function setCronFreq(freq, btn) {
+  _cronFreq = freq;
+  document.querySelectorAll('.cron-freq-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  else document.querySelector('.cron-freq-btn.active')?.classList.remove('active');
+  // Re-highlight the right button if called without btn (init)
+  if (!btn) {
+    document.querySelectorAll('.cron-freq-btn').forEach(b => {
+      if (b.textContent.toLowerCase().replace(/\s/g,'-').includes(freq)) b.classList.add('active');
+    });
+  }
+  const area = $('cronFreqFields');
+  if (!area) return;
+  if (freq === 'every-n-min') {
+    area.innerHTML = `<div class="cron-row"><label style="font-size:12px;flex:none;margin-right:4px">Every</label><input id="cronNMin" type="number" min="1" value="30" style="max-width:80px" oninput="updateCronPreview()"><label style="font-size:12px;flex:none">minutes</label></div>`;
+  } else if (freq === 'hourly') {
+    area.innerHTML = `<div class="cron-row"><label style="font-size:12px;flex:none;margin-right:4px">At minute</label><input id="cronHMin" type="number" min="0" max="59" value="0" style="max-width:80px" oninput="updateCronPreview()"></div>`;
+  } else if (freq === 'daily') {
+    area.innerHTML = `<div class="cron-row"><input id="cronDTime" type="time" value="09:00" oninput="updateCronPreview()"></div>`;
+  } else if (freq === 'weekly') {
+    area.innerHTML = `<div class="cron-row"><select id="cronWDay"><option value="1">Monday</option><option value="2">Tuesday</option><option value="3">Wednesday</option><option value="4">Thursday</option><option value="5">Friday</option><option value="6">Saturday</option><option value="0">Sunday</option></select><input id="cronWTime" type="time" value="09:00" oninput="updateCronPreview()"></div>`;
+  } else {
+    area.innerHTML = `<input id="cronCronExpr" placeholder="Cron expression (e.g. */15 * * * *)" oninput="updateCronPreview()">`;
+  }
+  updateCronPreview();
+}
+
+function buildCronExpr() {
+  if (_cronFreq === 'every-n-min') {
+    const n = parseInt($('cronNMin')?.value) || 30;
+    return `*/${n} * * * *`;
+  }
+  if (_cronFreq === 'hourly') {
+    const m = parseInt($('cronHMin')?.value) || 0;
+    return `${m} * * * *`;
+  }
+  if (_cronFreq === 'daily') {
+    const t = ($('cronDTime')?.value || '09:00').split(':');
+    return `${parseInt(t[1])||0} ${parseInt(t[0])||9} * * *`;
+  }
+  if (_cronFreq === 'weekly') {
+    const d = $('cronWDay')?.value || '1';
+    const t = ($('cronWTime')?.value || '09:00').split(':');
+    return `${parseInt(t[1])||0} ${parseInt(t[0])||9} * * ${d}`;
+  }
+  return $('cronCronExpr')?.value?.trim() || '';
+}
+
+function updateCronPreview() {
+  const el = $('cronPreview');
+  if (!el) return;
+  const expr = buildCronExpr();
+  el.textContent = expr ? humanizeSchedule(expr) + '  (' + expr + ')' : '';
 }
 
 async function createCronJob() {
-  const name = $('cronName')?.value?.trim() || '未命名';
-  const schedule = $('cronSchedule')?.value?.trim();
+  const name = $('cronName')?.value?.trim() || 'Untitled';
   const prompt = $('cronPrompt')?.value?.trim();
-  const deliver = $('cronDeliver')?.value || 'default';
-  if (!schedule || !prompt) { addSystemMsg('请填写定时表达式和执行内容'); return; }
+  const schedule = buildCronExpr();
+  if (!schedule) { addSystemMsg('Please set a schedule'); return; }
+  if (!prompt) { addSystemMsg('Please enter a prompt'); return; }
   try {
-    await hermesHTTP('POST', '/api/cron/jobs', { name, schedule, prompt, deliver });
-    addSystemMsg('定时任务已创建');
+    await hermesHTTP('POST', '/api/cron/jobs', { name, schedule, prompt });
+    addSystemMsg('Scheduled task created');
     loadSettingsCron();
-  } catch (e) { addSystemMsg('创建失败: ' + e.message); }
+  } catch (e) { addSystemMsg('Failed to create: ' + e.message); }
 }
 
 async function cronAction(id, action) {
   try {
     if (action === 'delete') {
       await hermesHTTP('DELETE', '/api/cron/jobs/' + id);
-      addSystemMsg('任务已删除');
+      addSystemMsg('Task deleted');
     } else {
       await hermesHTTP('POST', '/api/cron/jobs/' + id + '/' + action);
-      addSystemMsg('任务已' + ({pause:'暂停',resume:'恢复',trigger:'触发'}[action] || action));
+      addSystemMsg('Task ' + ({pause:'paused',resume:'resumed',trigger:'triggered'}[action] || action));
     }
     loadSettingsCron();
-  } catch (e) { addSystemMsg('操作失败: ' + e.message); }
+  } catch (e) { addSystemMsg('Action failed: ' + e.message); }
 }
 
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && $('settingsCol').style.display !== 'none') closeSettings(); });
+
+// ── Init: detect auth mode, auto-connect ──
+(async function() {
+  const user = await detectAuthMode();
+  if (_oauthMode) {
+    // Show GitHub button, hide legacy form
+    const oauth = $('oauthSection'); if (oauth) oauth.style.display = '';
+    const legacy = $('legacySection'); if (legacy) legacy.style.display = 'none';
+    if (user) {
+      // Already logged in — auto-connect
+      connect(user.sub);
+    }
+  } else {
+    // Legacy mode — show username form
+    const oauth = $('oauthSection'); if (oauth) oauth.style.display = 'none';
+    const legacy = $('legacySection'); if (legacy) legacy.style.display = '';
+    const saved = localStorage.getItem('hermes_last_uid');
+    if (saved) { const el = $('userId'); if (el) el.value = saved; }
+    const uidInput = $('userId');
+    if (uidInput) uidInput.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) connect(); });
+    const urlInput = $('brokerUrl');
+    if (urlInput) urlInput.addEventListener('keydown', e => { if (e.key === 'Enter') uidInput?.focus(); });
+  }
+})();
+
+// Save username on connect (legacy mode only)
+(function() {
+  const _orig = connect;
+  connect = async function(uid) {
+    if (!_oauthMode) {
+      const u = uid || $('userId')?.value?.trim();
+      if (u) localStorage.setItem('hermes_last_uid', u);
+    }
+    await _orig(uid);
+  };
+})();
 </script>
+  <div id="skillDetailModal"></div>
 </body>
 </html>
