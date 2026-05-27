@@ -357,6 +357,13 @@ body {
 .msg.assistant .msg-body.md pre:hover .md-code-copy { opacity: 1; }
 .md-code-copy:hover { background: var(--hover); color: var(--text); }
 .msg.system .msg-body { font-size: 12px; color: var(--text-dim); font-style: italic; }
+.msg-attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.msg-attachments + .msg-text { margin-top: 4px; }
+.att-card { display: inline-flex; align-items: center; gap: 6px; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 6px 10px; font-size: 13px; color: var(--text-dim); max-width: 220px; overflow: hidden; }
+.att-card .att-icon { font-size: 16px; flex-shrink: 0; }
+.att-card .att-info { min-width: 0; }
+.att-card .att-name { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); font-weight: 500; }
+.att-card .att-size { font-size: 11px; color: var(--text-dim); }
 
 .msg.streaming .msg-body::after {
   content: '';
@@ -1547,20 +1554,22 @@ async function sendMessage() {
   if (!conv?.hermesSid) { addSystemMsg('Session expired'); return; }
 
   // Build display text and prompt text BEFORE clearing pending files
-  const displayText = text || '📎 ' + _pendingFiles.map(f => f.name).join(', ');
+  const displayText = text || '';
   const promptText = buildFilePrompt(text);
+  const sentFiles = _pendingFiles.map(f => ({ name: f.name, size: f.size, isImage: f.isImage }));
 
   // Attach pending files to session context (clears _pendingFiles)
   await attachPendingFiles(conv);
 
-  conv.messages.push({ role: 'user', text: displayText, ts: Date.now() });
+  conv.messages.push({ role: 'user', text: displayText, files: sentFiles, ts: Date.now() });
   conv.updatedAt = Date.now();
   if (conv.title === 'New chat') {
-    conv.title = displayText.slice(0, 30) + (displayText.length > 30 ? '...' : '');
+    const titleText = displayText || sentFiles.map(f => f.name).join(', ');
+    conv.title = titleText.slice(0, 30) + (titleText.length > 30 ? '...' : '');
     rpc('session.title', { session_id: conv.hermesSid, title: conv.title }).catch(() => {});
     renderSessionList();
   }
-  save(); addUserMsg(displayText);
+  save(); addUserMsg(displayText, sentFiles);
   el.value = ''; el.style.height = 'auto';
   disableInput();
 
@@ -1629,16 +1638,22 @@ function renderMessages() {
   }
   container.innerHTML = '';
   for (const m of conv.messages) {
-    if (m.role === 'user') _appendMsg(container, 'user', m.text);
+    if (m.role === 'user') _appendMsg(container, 'user', m.text, m.files);
     else if (m.role === 'assistant') _appendMsg(container, 'assistant', m.text);
   }
   scrollBottom();
 }
 
-function _appendMsg(container, role, text) {
+function _appendMsg(container, role, text, files) {
   const div = document.createElement('div');
   div.className = 'msg ' + role;
-  const bodyHtml = role === 'assistant' ? renderMd(text) : esc(text);
+  let bodyHtml = '';
+  if (role === 'user') {
+    if (files && files.length) bodyHtml += _renderAttachments(files);
+    bodyHtml += (text ? `<div class="msg-text">${esc(text)}</div>` : '');
+  } else {
+    bodyHtml = renderMd(text);
+  }
   div.innerHTML = `<div class="msg-label">${role === 'user' ? 'You' : 'Hermes'}</div><div class="msg-body${role === 'assistant' ? ' md' : ''}">${bodyHtml}</div>`;
   container.appendChild(div);
   if (role === 'assistant') addCodeCopyBtns(div);
@@ -1753,10 +1768,13 @@ function showToolThinking(toolName) {
 
 function hideEmpty() { const e = $('emptyState'); if (e) e.style.display = 'none'; }
 
-function addUserMsg(text) {
+function addUserMsg(text, files) {
   hideEmpty();
   const div = document.createElement('div'); div.className = 'msg user';
-  div.innerHTML = `<div class="msg-label">You</div><div class="msg-body">${esc(text)}</div>`;
+  let body = '';
+  if (files && files.length) body += _renderAttachments(files);
+  if (text) body += `<div class="msg-text">${esc(text)}</div>`;
+  div.innerHTML = `<div class="msg-label">You</div><div class="msg-body">${body}</div>`;
   $('messages').appendChild(div); scrollBottom();
 }
 
@@ -1778,6 +1796,12 @@ function addSystemMsg(text) {
 function scrollBottom() { const m = $('messages'); m.scrollTop = m.scrollHeight; }
 
 function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+function _renderAttachments(files) {
+  return '<div class="msg-attachments">' + files.map(f =>
+    `<div class="att-card"><span class="att-icon">${f.isImage ? '&#128247;' : '&#128196;'}</span><div class="att-info"><span class="att-name">${esc(f.name)}</span><span class="att-size">${_fmtSize(f.size)}</span></div></div>`
+  ).join('') + '</div>';
+}
 
 // ── Markdown rendering ──
 let _mdReady = typeof marked !== 'undefined';
