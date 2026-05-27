@@ -227,29 +227,53 @@ body {
   border-top: 1px solid var(--border);
 }
 
-/* ── Main area (chat + settings split) ── */
+/* ── Main area ── */
 .main {
   flex: 1;
   display: flex;
+  flex-direction: column;
   min-width: 0;
+  position: relative;
+  background: var(--chat-bg);
 }
 
-.chat-col {
+/* ── Settings overlay (covers chat area) ── */
+.settings-col {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  background: var(--sidebar);
+}
+
+.settings-nav {
+  width: 180px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  padding: 12px 0;
+  overflow-y: auto;
+}
+
+.snav-item {
+  display: block;
+  width: 100%;
+  padding: 10px 20px;
+  font-size: 14px;
+  color: var(--text);
+  background: none;
+  border: none;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.snav-item:hover { background: var(--hover); }
+.snav-item.active { background: var(--hover); font-weight: 600; color: var(--accent); }
+
+.settings-content {
   flex: 1;
   display: flex;
   flex-direction: column;
   min-width: 0;
-  background: var(--chat-bg);
-}
-
-.settings-col {
-  width: 480px;
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  border-left: 1px solid var(--border);
-  background: var(--sidebar);
-  overflow: hidden;
 }
 
 /* ── Messages ── */
@@ -485,7 +509,7 @@ body {
 @media (max-width: 768px) {
   .sidebar { width: 200px; }
   .msg { padding: 12px 16px; }
-  .settings-col { width: 320px; }
+  .settings-nav { width: 140px; }
 }
 </style>
 </head>
@@ -524,30 +548,36 @@ body {
 </div>
 
 <div class="main">
-  <div class="chat-col">
-    <div class="messages" id="messages">
-      <div class="empty-state" id="emptyState">
-        <div class="logo">&#9889;</div>
-        <p>连接服务器开始对话</p>
-      </div>
+  <div class="messages" id="messages">
+    <div class="empty-state" id="emptyState">
+      <div class="logo">&#9889;</div>
+      <p>连接服务器开始对话</p>
     </div>
-    <div class="input-area">
-      <div class="input-wrap" id="inputWrap">
-        <input type="file" class="file-input" id="fileInput" accept="image/*" onchange="handleFileSelect(event)">
-        <button class="btn-icon" id="attachBtn" onclick="$('fileInput').click()" disabled title="上传图片">&#128206;</button>
-        <textarea id="input" placeholder="输入消息…" rows="1" disabled></textarea>
-        <button class="btn-icon" id="undoBtn" onclick="undoLastTurn()" disabled title="撤销上一轮">&#8617;</button>
-        <button class="btn-icon send" id="sendBtn" onclick="sendMessage()" disabled title="发送">&#10148;</button>
-      </div>
+  </div>
+  <div class="input-area">
+    <div class="input-wrap" id="inputWrap">
+      <input type="file" class="file-input" id="fileInput" accept="image/*" onchange="handleFileSelect(event)">
+      <button class="btn-icon" id="attachBtn" onclick="$('fileInput').click()" disabled title="上传图片">&#128206;</button>
+      <textarea id="input" placeholder="输入消息…" rows="1" disabled></textarea>
+      <button class="btn-icon" id="undoBtn" onclick="undoLastTurn()" disabled title="撤销上一轮">&#8617;</button>
+      <button class="btn-icon send" id="sendBtn" onclick="sendMessage()" disabled title="发送">&#10148;</button>
     </div>
   </div>
   <div class="settings-col" id="settingsCol" style="display:none">
-    <div class="settings-header">
-      <h3>Settings</h3>
-      <button class="settings-close" onclick="closeSettings()">&#10005;</button>
+    <div class="settings-nav">
+      <button class="snav-item active" data-nav="model" onclick="switchNav('model')">Model</button>
+      <button class="snav-item" data-nav="usage" onclick="switchNav('usage')">Usage</button>
+      <button class="snav-item" data-nav="skills" onclick="switchNav('skills')">Skills</button>
+      <button class="snav-item" data-nav="cron" onclick="switchNav('cron')">Scheduled Tasks</button>
     </div>
-    <div class="settings-body" id="settingsBody">
-      <div class="settings-loading">加载中…</div>
+    <div class="settings-content">
+      <div class="settings-header">
+        <h3 id="settingsTitle">Model</h3>
+        <button class="settings-close" onclick="closeSettings()">&#10005;</button>
+      </div>
+      <div class="settings-body" id="settingsBody">
+        <div class="settings-loading">加载中…</div>
+      </div>
     </div>
   </div>
 </div>
@@ -1262,39 +1292,39 @@ function scrollBottom() { const m = $('messages'); m.scrollTop = m.scrollHeight;
 
 function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
-// ── Settings (single-page drawer) ──
+// ── Settings (nav + content overlay) ──
+
+let _settingsNav = 'model';
+const _navTitles = { model: 'Model', usage: 'Usage', skills: 'Skills', cron: 'Scheduled Tasks' };
 
 function openSettings() {
   $('settingsCol').style.display = '';
-  loadSettings();
+  switchNav(_settingsNav);
 }
 
 function closeSettings() {
   $('settingsCol').style.display = 'none';
 }
 
-async function loadSettings() {
+function switchNav(section) {
+  _settingsNav = section;
+  document.querySelectorAll('.snav-item').forEach(b => b.classList.toggle('active', b.dataset.nav === section));
+  $('settingsTitle').textContent = _navTitles[section] || section;
   const body = $('settingsBody');
   body.innerHTML = '<div class="settings-loading">加载中…</div>';
+  if (section === 'model') loadSettingsModel();
+  else if (section === 'usage') loadSettingsUsage();
+  else if (section === 'skills') loadSettingsSkills();
+  else if (section === 'cron') loadSettingsCron();
+}
 
-  // Load all sections in parallel
-  const [modelRes, usageRes, skillsRes, cronRes] = await Promise.allSettled([
-    (async () => {
-      const [info, options] = await Promise.all([
-        hermesHTTP('GET', '/api/model/info'),
-        hermesHTTP('GET', '/api/model/options').catch(() => null)
-      ]);
-      return { info, options };
-    })(),
-    hermesHTTP('GET', '/api/analytics/usage?days=30').catch(e => ({ _error: e.message })),
-    hermesHTTP('GET', '/api/skills').catch(e => ({ _error: e.message })),
-    hermesHTTP('GET', '/api/cron/jobs').catch(e => ({ _error: e.message }))
-  ]);
-
-  // ── Model card ──
-  let modelCard = '';
-  if (modelRes.status === 'fulfilled') {
-    const { info, options } = modelRes.value;
+async function loadSettingsModel() {
+  const body = $('settingsBody');
+  try {
+    const [info, options] = await Promise.all([
+      hermesHTTP('GET', '/api/model/info'),
+      hermesHTTP('GET', '/api/model/options').catch(() => null)
+    ]);
     const cap = info.capabilities || {};
     const modelOpts = options?.models || (Array.isArray(options) ? options : []);
     let optHtml = `<option value="${esc(info.model)}" selected>${esc(info.model)}</option>`;
@@ -1302,26 +1332,32 @@ async function loadSettings() {
       const name = typeof m === 'string' ? m : (m.model || m.name || '');
       if (name && name !== info.model) optHtml += `<option value="${esc(name)}">${esc(name)}</option>`;
     }
-    modelCard = `
-      <div class="s-card-title">Model</div>
-      <div class="s-row" style="margin-bottom:8px"><span class="s-row-label">模型</span>
-        <select class="s-select" onchange="settingsSwitchModel(this.value)">${optHtml}</select>
+    body.innerHTML = `
+      <div class="s-card">
+        <div class="s-card-title">当前模型</div>
+        <div class="s-row" style="margin-bottom:8px"><span class="s-row-label">模型</span>
+          <select class="s-select" onchange="settingsSwitchModel(this.value)">${optHtml}</select>
+        </div>
       </div>
-      <div class="s-row"><span class="s-row-label">Provider</span><span class="s-row-value">${esc(info.provider || '-')}</span></div>
-      <div class="s-row"><span class="s-row-label">Context</span><span class="s-row-value">${fmtTokens(cap.context_window || info.effective_context_length || 0)}</span></div>
-      <div class="s-row"><span class="s-row-label">Max Output</span><span class="s-row-value">${fmtTokens(cap.max_output_tokens || 0)}</span></div>
-      <div class="s-row"><span class="s-row-label">Tools</span><span class="s-row-value">${cap.supports_tools ? '&#10003;' : '&#10007;'}</span></div>
-      <div class="s-row"><span class="s-row-label">Vision</span><span class="s-row-value">${cap.supports_vision ? '&#10003;' : '&#10007;'}</span></div>
-      <div class="s-row"><span class="s-row-label">Reasoning</span><span class="s-row-value">${cap.supports_reasoning ? '&#10003;' : '&#10007;'}</span></div>
-      <div class="s-row"><span class="s-row-label">Family</span><span class="s-row-value">${esc(cap.model_family || '-')}</span></div>`;
-  } else {
-    modelCard = '<div style="color:var(--danger);padding:8px 0">加载失败</div>';
+      <div class="s-card">
+        <div class="s-card-title">模型能力</div>
+        <div class="s-row"><span class="s-row-label">Provider</span><span class="s-row-value">${esc(info.provider || '-')}</span></div>
+        <div class="s-row"><span class="s-row-label">Context</span><span class="s-row-value">${fmtTokens(cap.context_window || info.effective_context_length || 0)}</span></div>
+        <div class="s-row"><span class="s-row-label">Max Output</span><span class="s-row-value">${fmtTokens(cap.max_output_tokens || 0)}</span></div>
+        <div class="s-row"><span class="s-row-label">Tools</span><span class="s-row-value">${cap.supports_tools ? '&#10003;' : '&#10007;'}</span></div>
+        <div class="s-row"><span class="s-row-label">Vision</span><span class="s-row-value">${cap.supports_vision ? '&#10003;' : '&#10007;'}</span></div>
+        <div class="s-row"><span class="s-row-label">Reasoning</span><span class="s-row-value">${cap.supports_reasoning ? '&#10003;' : '&#10007;'}</span></div>
+        <div class="s-row"><span class="s-row-label">Family</span><span class="s-row-value">${esc(cap.model_family || '-')}</span></div>
+      </div>`;
+  } catch(e) {
+    body.innerHTML = '<div style="color:var(--danger);padding:20px">加载失败: ' + esc(e.message) + '</div>';
   }
+}
 
-  // ── Usage card ──
-  let usageCard = '';
-  if (usageRes.status === 'fulfilled' && !usageRes.value._error) {
-    const data = usageRes.value;
+async function loadSettingsUsage() {
+  const body = $('settingsBody');
+  try {
+    const data = await hermesHTTP('GET', '/api/analytics/usage?days=30');
     const entries = data.usage || data.daily || data.entries || [];
     let totalIn = 0, totalOut = 0, totalCost = 0;
     if (Array.isArray(entries)) {
@@ -1331,7 +1367,6 @@ async function loadSettings() {
         totalCost += parseFloat(e.estimated_cost_usd || 0);
       }
     }
-
     let detailRows = '';
     if (Array.isArray(entries)) {
       for (const e of entries) {
@@ -1344,58 +1379,65 @@ async function loadSettings() {
         </tr>`;
       }
     }
-
-    usageCard = `
-      <div class="s-card-title">Usage <span style="font-weight:400;color:var(--text-dim);font-size:12px">（30 天）</span></div>
-      <div class="s-row"><span class="s-row-label">Input Tokens</span><span class="s-row-value">${fmtTokens(totalIn)}</span></div>
-      <div class="s-row"><span class="s-row-label">Output Tokens</span><span class="s-row-value">${fmtTokens(totalOut)}</span></div>
-      <div class="s-row"><span class="s-row-label">预估费用</span><span class="s-row-value">$${totalCost.toFixed(4)}</span></div>
-      ${detailRows ? `<table class="usage-table" style="margin-top:12px">
-        <tr><th>日期</th><th>输入</th><th>输出</th><th>会话</th><th>费用</th></tr>${detailRows}
-      </table>` : ''}`;
-  } else {
-    usageCard = '<div style="color:var(--danger);padding:8px 0">加载失败</div>';
-  }
-
-  // ── Skills card ──
-  let skillsCard = '';
-  if (skillsRes.status === 'fulfilled' && !skillsRes.value._error) {
-    const raw = skillsRes.value;
-    const list = Array.isArray(raw) ? raw : (raw.skills || []);
-    skillsCard = `
-      <div class="s-card-title">Skills</div>
-      <div class="skill-search">
-        <input id="skillSearchInput" placeholder="搜索技能…" onkeydown="if(event.key==='Enter')searchSkills()">
-        <button onclick="searchSkills()">搜索</button>
+    body.innerHTML = `
+      <div class="s-card">
+        <div class="s-card-title">30 天汇总</div>
+        <div class="s-row"><span class="s-row-label">Input Tokens</span><span class="s-row-value">${fmtTokens(totalIn)}</span></div>
+        <div class="s-row"><span class="s-row-label">Output Tokens</span><span class="s-row-value">${fmtTokens(totalOut)}</span></div>
+        <div class="s-row"><span class="s-row-label">预估费用</span><span class="s-row-value">$${totalCost.toFixed(4)}</span></div>
       </div>
-      <div class="skill-search">
-        <input id="skillInstallInput" placeholder="安装技能（名称）">
-        <button onclick="installSkill()">安装</button>
-      </div>`;
+      ${detailRows ? `<div class="s-card">
+        <div class="s-card-title">每日明细</div>
+        <table class="usage-table"><tr><th>日期</th><th>输入</th><th>输出</th><th>会话</th><th>费用</th></tr>${detailRows}</table>
+      </div>` : ''}`;
+  } catch(e) {
+    body.innerHTML = '<div style="color:var(--danger);padding:20px">加载失败: ' + esc(e.message) + '</div>';
+  }
+}
+
+async function loadSettingsSkills() {
+  const body = $('settingsBody');
+  try {
+    const skills = await hermesHTTP('GET', '/api/skills');
+    const list = Array.isArray(skills) ? skills : (skills.skills || []);
+    let html = `
+      <div class="s-card">
+        <div class="s-card-title">技能管理</div>
+        <div class="skill-search">
+          <input id="skillSearchInput" placeholder="搜索技能…" onkeydown="if(event.key==='Enter')searchSkills()">
+          <button onclick="searchSkills()">搜索</button>
+        </div>
+        <div class="skill-search">
+          <input id="skillInstallInput" placeholder="安装技能（名称）">
+          <button onclick="installSkill()">安装</button>
+        </div>`;
     for (const s of list) {
-      skillsCard += `<div class="skill-item">
+      html += `<div class="skill-item">
         <div class="skill-info"><div class="skill-name">${esc(s.name)}</div><div class="skill-desc">${esc(s.description || '')}</div></div>
         <label class="toggle"><input type="checkbox" ${s.enabled ? 'checked' : ''} onchange="toggleSkill('${esc(s.name)}',this.checked)"><span class="toggle-slider"></span></label>
       </div>`;
     }
-    if (list.length === 0) skillsCard += '<div class="s-empty">暂无技能</div>';
-    skillsCard += '<div id="skillSearchResults"></div>';
-  } else {
-    skillsCard = '<div style="color:var(--danger);padding:8px 0">加载失败</div>';
+    if (list.length === 0) html += '<div class="s-empty">暂无技能</div>';
+    html += '<div id="skillSearchResults"></div></div>';
+    body.innerHTML = html;
+  } catch(e) {
+    body.innerHTML = '<div style="color:var(--danger);padding:20px">加载失败: ' + esc(e.message) + '</div>';
   }
+}
 
-  // ── Cron card ──
-  let cronCard = '';
-  if (cronRes.status === 'fulfilled' && !cronRes.value._error) {
-    const raw = cronRes.value;
-    const jobs = Array.isArray(raw) ? raw : (raw.jobs || []);
-    cronCard = `
-      <div class="s-card-title">Scheduled Tasks</div>
-      <button class="btn btn-primary" style="margin-bottom:12px;max-width:140px" onclick="showCronForm()">+ 新建任务</button>
-      <div id="cronFormArea"></div>`;
+async function loadSettingsCron() {
+  const body = $('settingsBody');
+  try {
+    const data = await hermesHTTP('GET', '/api/cron/jobs');
+    const jobs = Array.isArray(data) ? data : (data.jobs || []);
+    let html = `
+      <div class="s-card">
+        <div class="s-card-title">定时任务</div>
+        <button class="btn btn-primary" style="margin-bottom:12px;max-width:140px" onclick="showCronForm()">+ 新建任务</button>
+        <div id="cronFormArea"></div>`;
     for (const j of jobs) {
       const paused = j.paused || j.status === 'paused';
-      cronCard += `<div class="cron-item">
+      html += `<div class="cron-item">
         <div class="cron-header">
           <span class="cron-name">${esc(j.name || j.id || '未命名')}</span>
           <div class="cron-actions">
@@ -1410,16 +1452,12 @@ async function loadSettings() {
         <div class="cron-prompt">${esc(j.prompt || '')}</div>
       </div>`;
     }
-    if (jobs.length === 0) cronCard += '<div class="s-empty">暂无定时任务</div>';
-  } else {
-    cronCard = '<div style="color:var(--danger);padding:8px 0">加载失败</div>';
+    if (jobs.length === 0) html += '<div class="s-empty">暂无定时任务</div>';
+    html += '</div>';
+    body.innerHTML = html;
+  } catch(e) {
+    body.innerHTML = '<div style="color:var(--danger);padding:20px">加载失败: ' + esc(e.message) + '</div>';
   }
-
-  body.innerHTML = `
-    <div class="s-card">${modelCard}</div>
-    <div class="s-card">${usageCard}</div>
-    <div class="s-card">${skillsCard}</div>
-    <div class="s-card">${cronCard}</div>`;
 }
 
 async function settingsSwitchModel(model) {
@@ -1471,7 +1509,7 @@ async function installSkillByName(name) {
   try {
     const r = await rpc('skills.manage', { action: 'install', query: name });
     addSystemMsg('技能已安装: ' + (r.name || name));
-    loadSettings();
+    loadSettingsSkills();
   } catch (e) { addSystemMsg('安装失败: ' + e.message); }
 }
 
@@ -1498,7 +1536,7 @@ async function createCronJob() {
   try {
     await hermesHTTP('POST', '/api/cron/jobs', { name, schedule, prompt, deliver });
     addSystemMsg('定时任务已创建');
-    loadSettings();
+    loadSettingsCron();
   } catch (e) { addSystemMsg('创建失败: ' + e.message); }
 }
 
@@ -1511,7 +1549,7 @@ async function cronAction(id, action) {
       await hermesHTTP('POST', '/api/cron/jobs/' + id + '/' + action);
       addSystemMsg('任务已' + ({pause:'暂停',resume:'恢复',trigger:'触发'}[action] || action));
     }
-    loadSettings();
+    loadSettingsCron();
   } catch (e) { addSystemMsg('操作失败: ' + e.message); }
 }
 
