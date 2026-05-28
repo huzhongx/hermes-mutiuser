@@ -2,14 +2,15 @@
 
 ## 概述
 
-Hermes Platform 提供三层 API：
+Hermes Platform 提供四层 API：
 
 | 层级 | 入口 | 协议 | 认证 |
 |------|------|------|------|
 | GitHub OAuth | `/auth/*` | HTTP (redirect) | OAuth cookie |
 | Process Broker | `/broker/*` | HTTP REST | OAuth cookie（可选）或 `X-User-ID` header |
-| Hermes Dashboard | `/api/*` | HTTP REST | Bearer Token |
-| Hermes Dashboard | `/api/ws` | WebSocket JSON-RPC | Token (query) |
+| Web Proxy（推荐） | `/api/*` | HTTP REST + WS | OAuth cookie（对外唯一入口，隐藏内部端口和 token） |
+| Hermes Dashboard | `/api/*`（内部） | HTTP REST | Bearer Token |
+| Hermes Dashboard | `/api/ws`（内部） | WebSocket JSON-RPC | Token (query) |
 
 所有外部请求通过 nginx 反向代理（`https://huzhongxiang.cloud`），内部服务监听 `127.0.0.1`。
 
@@ -158,7 +159,74 @@ GitHub OAuth 回调。用 code 换取 access_token → 获取 GitHub 用户信�
 
 ---
 
-## 二、Hermes Dashboard HTTP REST API
+## 二-B、Web Proxy API（对外安全入口）
+
+**后端**: `hermes_broker.py` ｜ **监听**: `127.0.0.1:8080` ｜ **外部路径**: `/api/*`
+
+Web Proxy 层是浏览器端的唯一对外入口。所有内部 URL、端口号、ws_token 由 proxy 层持有，浏览器只通过 cookie 认证访问 `/api/*` 路径，不暴露任何内部信息。
+
+### 认证
+
+所有端点通过 JWT cookie（`hermes_session`）认证，无需 Bearer token 或查询参数 token。
+
+### WebSocket Proxy
+
+**WS** `/api/ws`
+
+浏览器连接 `wss://domain/api/ws`（cookie 自动携带），proxy 层双向转发到内部 Hermes 进程 WS。
+
+```
+浏览器 ←WS→ Proxy ←WS→ Hermes Process (localhost:{port}/api/ws?token=xxx)
+```
+
+- RPC ID 透传，事件双向转发
+- 断线任一侧关闭，另一侧自动关闭
+
+### HTTP Proxy
+
+| 方法 | 对外路径 | 说明 |
+|------|---------|------|
+| POST | `/api/sessions` | 分配/获取进程（替代 `/broker/sessions`，不返回 port/token） |
+| GET | `/api/sessions` | 会话列表 |
+| GET | `/api/sessions/{key}/messages` | 消息历史 |
+| DELETE | `/api/sessions/{key}` | 删除会话 |
+| GET | `/api/model/info` | 模型信息 |
+| POST | `/api/model/set` | 切换模型 |
+| GET | `/api/model/options` | 模型选项 |
+| GET | `/api/skills` | 技能列表 |
+| PUT | `/api/skills/toggle` | 技能开关 |
+| POST | `/api/upload` | 文件上传（替代 `/broker/upload`，最大 50MB） |
+| GET | `/api/files/{filename}` | 文件下载（替代 `/broker/files/{user_id}/{filename}`） |
+| GET | `/api/cron/jobs` | 定时任务列表 |
+| POST | `/api/cron/jobs` | 创建定时任务 |
+| PUT | `/api/cron/jobs/{id}` | 更新定时任务 |
+| DELETE | `/api/cron/jobs/{id}` | 删除定时任务 |
+| GET | `/api/status` | 状态（公开） |
+
+### POST /api/sessions
+
+```json
+// 响应（精简，不含 port/pid/ws_token）
+{
+  "user_id": "alice",
+  "status": "active",
+  "created_at": 1717000000.0
+}
+```
+
+### 安全对比
+
+| 信息 | 直接模式（浏览器可见） | Proxy 模式（浏览器可见） |
+|------|----------------------|------------------------|
+| 端口号 9119-9200 | ws_url/http_url 中可见 | 完全隐藏 |
+| ws_token | brokerInfo.ws_token | 完全隐藏 |
+| pid / session_id | brokerInfo 中可见 | 完全隐藏 |
+| WS 认证 | `?token=xxx`（URL 参数） | Cookie（HttpOnly） |
+| HTTP 认证 | Bearer token（header） | Cookie（HttpOnly） |
+
+---
+
+## 二-C、Hermes Dashboard HTTP REST API
 
 **后端**: Hermes dashboard 进程 ｜ **端口**: 9119-9200 ｜ **外部路径**: `/hermes/dash/{port}/api/*`
 
@@ -705,6 +773,10 @@ Token 即 Broker 返回的 `ws_token`（与 WS 共用）。少数端点为公开
 
 之后通过事件流接收响应内容。
 
+**发送锁**: 客户端应实现发送锁（`_sending` 标志），防止并发 `prompt.submit`。在 `enableInput()` 时释放锁。
+
+**自动压缩**: 当会话历史超过 80 条消息时，客户端可自动调用 `session.compress` 压缩历史以减少 token 消耗。
+
 #### prompt.background
 
 后台提交 prompt（不阻塞主会话）。
@@ -712,6 +784,19 @@ Token 即 Broker 返回的 `ws_token`（与 WS 共用）。少数端点为公开
 ```json
 { "method": "prompt.background", "params": { "session_id": "...", "text": "...", "priority": "normal" } }
 ```
+
+### 3.2-B 交互回复方法
+
+当收到交互事件（`clarify.request`、`approval.request`、`sudo.request`、`secret.request`）时，客户端需调用对应方法回复。
+
+详细参数说明见 [3.5 交互事件](#35-事件推送) 中的"交互回复方法"小节。
+
+| 方法 | 说明 |
+|------|------|
+| `clarify.respond` | 回答澄清问题 `{answer, request_id}` |
+| `approval.respond` | 命令审批 `{choice: "once"|"session"|"always"|"deny", request_id}` |
+| `sudo.respond` | 提供 sudo 密码 `{password, request_id}` |
+| `secret.respond` | 提供密钥 `{value, request_id}` |
 
 ---
 
@@ -866,9 +951,52 @@ Token 即 Broker 返回的 `ws_token`（与 WS 共用）。少数端点为公开
 
 | 事件 | payload | 说明 |
 |------|---------|------|
-| `approval.request` | approval 详情 | 审批请求 |
+| `clarify.request` | `{question, choices?, request_id}` | Agent 澄清问题，需通过 `clarify.respond` 回复 |
+| `approval.request` | `{command, description?, request_id}` | 命令审批请求，需通过 `approval.respond` 回复 |
+| `sudo.request` | `{request_id}` | Agent 需要 sudo 密码，需通过 `sudo.respond` 回复 |
+| `secret.request` | `{prompt, env_var?, request_id}` | 需要用户提供密钥/凭证，需通过 `secret.respond` 回复 |
 | `voice.transcript` | `{text}` | 语音转写 |
 | `voice.status` | `{state}` | 语音状态 |
+
+#### 交互回复方法
+
+客户端收到交互事件后，需调用对应的 respond 方法回复：
+
+**clarify.respond** — 回答澄清问题：
+
+```json
+{ "method": "clarify.respond", "params": { "answer": "用户选择的答案", "request_id": "xxx" } }
+```
+
+- 若事件含 `choices` 数组，`answer` 为选中的选项文本
+- 若无 `choices`，`answer` 为用户自由输入的文本
+
+**approval.respond** — 命令审批：
+
+```json
+{ "method": "approval.respond", "params": { "choice": "once|session|always|deny", "request_id": "xxx" } }
+```
+
+| choice | 说明 |
+|--------|------|
+| `once` | 仅本次允许 |
+| `session` | 本次会话允许 |
+| `always` | 始终允许 |
+| `deny` | 拒绝 |
+
+**sudo.respond** — 提供 sudo 密码：
+
+```json
+{ "method": "sudo.respond", "params": { "password": "user_password", "request_id": "xxx" } }
+```
+
+**secret.respond** — 提供密钥/凭证：
+
+```json
+{ "method": "secret.respond", "params": { "value": "secret_value", "request_id": "xxx" } }
+```
+
+- 传空字符串 `""` 表示跳过
 
 ---
 
@@ -890,9 +1018,11 @@ Hermes 使用两套 ID：
 | 外部路径 | 后端 | 说明 |
 |----------|------|------|
 | `/auth/*` | `127.0.0.1:8080` | GitHub OAuth 登录 |
-| `/broker/*` | `127.0.0.1:8080` | Process Broker |
-| `/hermes/ws/{port}/*` | `127.0.0.1:{port}` | Dashboard WS (Origin 重写为 127.0.0.1) |
-| `/hermes/dash/{port}/*` | `127.0.0.1:{port}` | Dashboard HTTP |
+| `/api/*` | `127.0.0.1:8080` | Web Proxy API（对外唯一安全入口） |
+| `/api/ws` | `127.0.0.1:8080` | WebSocket Proxy（双向转发） |
+| `/broker/*` | `127.0.0.1:8080` | Process Broker（建议限制为 127.0.0.1） |
+| `/hermes/ws/{port}/*` | `127.0.0.1:{port}` | Dashboard WS（内部，建议限制为 127.0.0.1） |
+| `/hermes/dash/{port}/*` | `127.0.0.1:{port}` | Dashboard HTTP（内部，建议限制为 127.0.0.1） |
 | `/hermes/v1/*` | `127.0.0.1:8642` | Agent API (OpenAI 兼容) |
 | `/v1/chat/completions` | `127.0.0.1:3000` | OpenAI 格式代理 |
 | `/v1/messages` | `127.0.0.1:3000` | Anthropic 格式代理 |
@@ -900,6 +1030,8 @@ Hermes 使用两套 ID：
 | `/health` | `127.0.0.1:3000` | 健康检查 |
 
 **端口范围**: 9119-9200（共 82 个端口）
+
+**上传限制**: `client_max_body_size 50m`（nginx 配置）
 
 **限速**: `/api/admin/login` 5r/m，`/api/` 30r/m
 
