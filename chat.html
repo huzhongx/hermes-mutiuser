@@ -2437,6 +2437,21 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape' && $('setting
   }
 })();
 
+// ── Intercept F5/Ctrl+R: refresh session list only, skip full reload ──
+(function() {
+  async function refreshSessionList() {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return; // not connected, allow normal reload
+    try { await loadServerSessions(); } catch(e) {}
+  }
+
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'F5' || (e.ctrlKey && e.key === 'r') || (e.metaKey && e.key === 'r')) {
+      e.preventDefault();
+      refreshSessionList();
+    }
+  });
+})();
+
 // Save username on connect (legacy mode only)
 (function() {
   const _orig = connect;
