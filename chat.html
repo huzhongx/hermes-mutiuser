@@ -710,6 +710,65 @@ body {
 .btn-icon-sm { width: 34px; height: 34px; border-radius: 50%; border: none; background: transparent; color: var(--text-dim); font-size: 18px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
 .btn-icon-sm:hover { background: var(--hover); color: var(--text); }
 
+/* ── Interactive panels (clarify/approval/sudo/secret) ── */
+.interact-overlay {
+  position: fixed; inset: 0; z-index: 1000;
+  background: rgba(0,0,0,0.4); backdrop-filter: blur(2px);
+  display: flex; align-items: center; justify-content: center;
+}
+.interact-panel {
+  background: #fff; border-radius: 16px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+  max-width: 480px; width: calc(100% - 32px);
+  padding: 24px; animation: interactIn 0.15s ease-out;
+}
+@keyframes interactIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+.interact-panel .interact-title {
+  font-size: 15px; font-weight: 600; margin-bottom: 16px;
+  line-height: 1.5; color: var(--text);
+}
+.interact-panel .interact-desc {
+  font-size: 12px; color: var(--text-dim); margin-bottom: 12px;
+}
+.interact-panel .interact-cmd {
+  background: var(--code-bg); border-radius: 8px;
+  padding: 10px 12px; font-family: monospace; font-size: 13px;
+  margin-bottom: 16px; word-break: break-all; color: var(--text);
+  border: 1px solid var(--border);
+}
+.interact-panel .interact-choices { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.interact-panel .interact-choice-btn {
+  padding: 10px 14px; border: 1px solid var(--border); border-radius: 10px;
+  background: #fff; cursor: pointer; text-align: left; font-size: 14px;
+  transition: all 0.12s; color: var(--text);
+}
+.interact-panel .interact-choice-btn:hover { border-color: var(--accent); background: #fdf5f2; }
+.interact-panel .interact-choice-btn.danger { color: var(--danger); border-color: #fecaca; }
+.interact-panel .interact-choice-btn.danger:hover { background: #fef2f2; border-color: var(--danger); }
+.interact-panel .interact-choice-btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+.interact-panel .interact-choice-btn.primary:hover { background: var(--accent-hover); }
+.interact-panel .interact-input {
+  width: 100%; padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: 10px; font-size: 14px; outline: none; margin-bottom: 12px;
+  background: var(--bg);
+}
+.interact-panel .interact-input:focus { border-color: var(--accent); }
+.interact-panel .interact-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.interact-panel .interact-actions button {
+  padding: 8px 18px; border-radius: 8px; font-size: 13px;
+  font-weight: 500; cursor: pointer; border: 1px solid var(--border);
+  transition: all 0.12s;
+}
+.interact-panel .interact-actions .btn-cancel { background: #fff; color: var(--text-dim); }
+.interact-panel .interact-actions .btn-cancel:hover { background: var(--hover); }
+.interact-panel .interact-actions .btn-submit { background: var(--accent); color: #fff; border-color: var(--accent); }
+.interact-panel .interact-actions .btn-submit:hover { background: var(--accent-hover); }
+.interact-panel .interact-skip {
+  font-size: 12px; color: var(--text-dim); cursor: pointer;
+  background: none; border: none; text-align: center; width: 100%; margin-top: 4px;
+}
+.interact-panel .interact-skip:hover { color: var(--text); }
+
 /* ── Responsive ── */
 @media (max-width: 768px) {
   .sidebar { width: 200px; }
@@ -818,6 +877,7 @@ let activeConvId = null;
 let streamState = {};
 let _heartbeatTimer = null;
 let _reconnectTimer = null;
+let _sending = false;  // send lock: prevents concurrent prompt.submit
 let _userDisconnect = false;
 let _reconnectAttempts = 0;
 const MAX_RECONNECT = 10;
@@ -1010,6 +1070,22 @@ function handleWS(data, initResolve) {
     if (t === 'message.start') {
       const convId = convByHermesSid(evtSid);
       if (convId) {
+        // Finalize previous streaming msg if any
+        if (streamState[convId]) {
+          const prevText = streamState[convId].streamText;
+          const prevEl = document.getElementById('streamingMsg');
+          if (prevEl) {
+            prevEl.classList.remove('streaming');
+            prevEl.removeAttribute('id');
+            const body = prevEl.querySelector('.msg-body');
+            if (body) { body.innerHTML = renderMd(prevText); addCodeCopyBtns(prevEl); }
+          }
+          const conv = conversations[convId];
+          if (conv && prevText) {
+            conv.messages.push({ role: 'assistant', text: prevText, ts: Date.now() });
+            conv.updatedAt = Date.now(); save();
+          }
+        }
         streamState[convId] = { streamText: '' };
         if (convId === activeConvId) showStreamingUI();
       }
@@ -1025,10 +1101,12 @@ function handleWS(data, initResolve) {
           if (body) {
             clearTimeout(_streamRenderTimer);
             _streamRenderTimer = setTimeout(() => {
-              if (body) { body.innerHTML = renderMd(streamState[convId]?.streamText || ''); addCodeCopyBtns(body.parentElement); scrollBottom(); }
-            }, 120);
+              if (body && streamState[convId]) {
+                body.innerHTML = renderMd(streamState[convId].streamText || '');
+                addCodeCopyBtns(body.parentElement); scrollBottom();
+              }
+            }, 250);
           }
-          scrollBottom();
         }
       }
       return;
@@ -1042,6 +1120,7 @@ function handleWS(data, initResolve) {
         const el = document.getElementById('streamingMsg');
         if (el) {
           el.classList.remove('streaming');
+          el.removeAttribute('id');
           const body = el.querySelector('.msg-body');
           if (body) { body.innerHTML = renderMd(text); addCodeCopyBtns(el); }
         }
@@ -1055,7 +1134,6 @@ function handleWS(data, initResolve) {
         renderSessionList();
         enableInput();
         if (conv && !conv.sessionKey) fetchSessionKey(conv.id);
-        // Fetch usage after response
         if (conv?.hermesSid) fetchUsage(conv.id);
       }
       return;
@@ -1100,6 +1178,12 @@ function handleWS(data, initResolve) {
       return;
     }
     if (['tool.complete','session.info','thinking.delta','reasoning.delta','reasoning.available','status.update'].includes(t)) return;
+
+    // ── Interactive events (clarify/approval/sudo/secret) ──
+    if (t === 'clarify.request') { showClarifyUI(data.params?.payload); return; }
+    if (t === 'approval.request') { showApprovalUI(data.params?.payload); return; }
+    if (t === 'sudo.request') { showSudoUI(data.params?.payload); return; }
+    if (t === 'secret.request') { showSecretUI(data.params?.payload); return; }
   }
 
   // RPC responses
@@ -1124,6 +1208,140 @@ function rpc(method, params, timeout) {
       }, timeout);
     }
   });
+}
+
+// ── Interactive event helpers ──
+
+function _dismissInteract() {
+  const el = document.getElementById('interactOverlay');
+  if (el) el.remove();
+}
+
+function showClarifyUI(payload) {
+  _dismissInteract();
+  const { question, choices, request_id } = payload || {};
+  if (!request_id) return;
+
+  let html = '<div class="interact-title">' + esc(question || 'Agent asks:') + '</div>';
+
+  if (choices && choices.length > 0) {
+    html += '<div class="interact-choices">';
+    for (let i = 0; i < choices.length; i++) {
+      html += '<button class="interact-choice-btn" onclick="_clarifyAnswer(\'' + esc(request_id) + '\', ' + JSON.stringify(JSON.stringify(choices[i])) + ')">' + esc(choices[i]) + '</button>';
+    }
+    html += '<button class="interact-choice-btn" style="color:var(--text-dim);font-style:italic" onclick="_clarifyOther(\'' + esc(request_id) + '\')">Other (type your answer)</button>';
+    html += '</div>';
+  } else {
+    html += '<input class="interact-input" id="clarifyInput" placeholder="Type your answer…" onkeydown="if(event.key===\'Enter\')_clarifyAnswer(\'' + esc(request_id) + '\', JSON.stringify(document.getElementById(\'clarifyInput\').value))">';
+    html += '<div class="interact-actions"><button class="btn-submit" onclick="_clarifyAnswer(\'' + esc(request_id) + '\', JSON.stringify(document.getElementById(\'clarifyInput\').value))">Send</button></div>';
+  }
+
+  const overlay = document.createElement('div');
+  overlay.id = 'interactOverlay';
+  overlay.className = 'interact-overlay';
+  overlay.innerHTML = '<div class="interact-panel">' + html + '</div>';
+  document.body.appendChild(overlay);
+  const firstInput = overlay.querySelector('input');
+  if (firstInput) firstInput.focus();
+}
+
+function _clarifyOther(requestId) {
+  const panel = document.querySelector('#interactOverlay .interact-panel');
+  if (!panel) return;
+  // Replace choices with input
+  let html = '<div class="interact-title">Type your answer:</div>';
+  html += '<input class="interact-input" id="clarifyInput" autofocus onkeydown="if(event.key===\'Enter\')_clarifyAnswer(\'' + esc(requestId) + '\', JSON.stringify(document.getElementById(\'clarifyInput\').value))">';
+  html += '<div class="interact-actions"><button class="btn-submit" onclick="_clarifyAnswer(\'' + esc(requestId) + '\', JSON.stringify(document.getElementById(\'clarifyInput\').value))">Send</button></div>';
+  panel.innerHTML = html;
+  document.getElementById('clarifyInput').focus();
+}
+
+function _clarifyAnswer(requestId, answerJson) {
+  const answer = JSON.parse(answerJson);
+  _dismissInteract();
+  rpc('clarify.respond', { answer, request_id: requestId }).catch(() => {});
+}
+
+function showApprovalUI(payload) {
+  _dismissInteract();
+  const { command, description, request_id } = payload || {};
+  if (!request_id) return;
+
+  let html = '<div class="interact-title">Approve Command</div>';
+  if (description) html += '<div class="interact-desc">' + esc(description) + '</div>';
+  html += '<div class="interact-cmd">' + esc(command || '') + '</div>';
+  html += '<div class="interact-choices">';
+  html += '<button class="interact-choice-btn primary" onclick="_approvalChoice(\'' + esc(request_id) + '\',\'once\')">Allow once</button>';
+  html += '<button class="interact-choice-btn" onclick="_approvalChoice(\'' + esc(request_id) + '\',\'session\')">Allow for this session</button>';
+  html += '<button class="interact-choice-btn" onclick="_approvalChoice(\'' + esc(request_id) + '\',\'always\')">Always allow</button>';
+  html += '<button class="interact-choice-btn danger" onclick="_approvalChoice(\'' + esc(request_id) + '\',\'deny\')">Deny</button>';
+  html += '</div>';
+
+  const overlay = document.createElement('div');
+  overlay.id = 'interactOverlay';
+  overlay.className = 'interact-overlay';
+  overlay.innerHTML = '<div class="interact-panel">' + html + '</div>';
+  document.body.appendChild(overlay);
+}
+
+function _approvalChoice(requestId, choice) {
+  _dismissInteract();
+  rpc('approval.respond', { choice, request_id: requestId }).catch(() => {});
+}
+
+function showSudoUI(payload) {
+  _dismissInteract();
+  const { request_id } = payload || {};
+  if (!request_id) return;
+
+  let html = '<div class="interact-title">Sudo Password Required</div>';
+  html += '<div class="interact-desc">The agent needs sudo privileges.</div>';
+  html += '<input class="interact-input" id="sudoInput" type="password" placeholder="Enter password…" onkeydown="if(event.key===\'Enter\')_sudoSubmit(\'' + esc(request_id) + '\')">';
+  html += '<div class="interact-actions"><button class="btn-cancel" onclick="_dismissInteract()">Cancel</button><button class="btn-submit" onclick="_sudoSubmit(\'' + esc(request_id) + '\')">Submit</button></div>';
+
+  const overlay = document.createElement('div');
+  overlay.id = 'interactOverlay';
+  overlay.className = 'interact-overlay';
+  overlay.innerHTML = '<div class="interact-panel">' + html + '</div>';
+  document.body.appendChild(overlay);
+  document.getElementById('sudoInput').focus();
+}
+
+function _sudoSubmit(requestId) {
+  const input = document.getElementById('sudoInput');
+  if (!input) return;
+  _dismissInteract();
+  rpc('sudo.respond', { password: input.value, request_id: requestId }).catch(() => {});
+}
+
+function showSecretUI(payload) {
+  _dismissInteract();
+  const { prompt, env_var, request_id } = payload || {};
+  if (!request_id) return;
+
+  let html = '<div class="interact-title">' + esc(prompt || 'Secret Required') + '</div>';
+  if (env_var) html += '<div class="interact-desc">Environment variable: <code>' + esc(env_var) + '</code></div>';
+  html += '<input class="interact-input" id="secretInput" type="password" placeholder="Enter value…" onkeydown="if(event.key===\'Enter\')_secretSubmit(\'' + esc(request_id) + '\')">';
+  html += '<div class="interact-actions"><button class="btn-cancel" onclick="_secretSkip(\'' + esc(request_id) + '\')">Skip</button><button class="btn-submit" onclick="_secretSubmit(\'' + esc(request_id) + '\')">Submit</button></div>';
+
+  const overlay = document.createElement('div');
+  overlay.id = 'interactOverlay';
+  overlay.className = 'interact-overlay';
+  overlay.innerHTML = '<div class="interact-panel">' + html + '</div>';
+  document.body.appendChild(overlay);
+  document.getElementById('secretInput').focus();
+}
+
+function _secretSubmit(requestId) {
+  const input = document.getElementById('secretInput');
+  if (!input) return;
+  _dismissInteract();
+  rpc('secret.respond', { value: input.value, request_id: requestId }).catch(() => {});
+}
+
+function _secretSkip(requestId) {
+  _dismissInteract();
+  rpc('secret.respond', { value: '', request_id: requestId }).catch(() => {});
 }
 
 // ── Hermes HTTP ──
@@ -1204,7 +1422,8 @@ async function switchModel(model) {
   try {
     await hermesHTTP('POST', '/api/model/set', { scope: 'main', model });
     currentModel = model;
-    addSystemMsg('Model switched to ' + model);
+    showStatusBar('Model switched to ' + model);
+    setTimeout(() => hideStatusBar(), 2000);
   } catch (e) { addSystemMsg('Failed to switch model: ' + e.message); }
 }
 
@@ -1393,7 +1612,7 @@ async function undoLastTurn() {
         }
       }
       save(); renderMessages();
-      addSystemMsg('Last turn undone');
+      showStatusBar('Undone'); setTimeout(() => hideStatusBar(), 1500);
     }
   } catch (e) { addSystemMsg('Undo failed: ' + e.message); }
 }
@@ -1406,7 +1625,8 @@ async function compressConversation(convId, event) {
   if (!conv?.hermesSid) { addSystemMsg('Please open this chat first'); return; }
   try {
     const r = await rpc('session.compress', { session_id: conv.hermesSid, strategy: 'last' });
-    addSystemMsg(`Compressed: ${r.old_count || '?'} → ${r.new_count || '?'} messages`);
+    showStatusBar(`Compressed: ${r.old_count || '?'} → ${r.new_count || '?'} messages`);
+    setTimeout(() => hideStatusBar(), 2000);
   } catch (e) { addSystemMsg('Compress failed: ' + e.message); }
 }
 
@@ -1454,7 +1674,7 @@ async function uploadFiles(fileList) {
   if (!brokerInfo) { addSystemMsg('Not connected'); return; }
 
   for (const file of fileList) {
-    addSystemMsg('Uploading ' + file.name + '\u2026');
+    showStatusBar('Uploading ' + file.name + '\u2026');
     try {
       const formData = new FormData();
       formData.append('file', file);
@@ -1471,7 +1691,8 @@ async function uploadFiles(fileList) {
         isImage: /\.(png|jpe?g|gif|webp|bmp|svg|tiff?)$/i.test(file.name),
       });
       renderPendingFiles();
-      addSystemMsg(file.name + ' ready (' + _fmtSize(file.size) + ')');
+      showStatusBar(file.name + ' ready (' + _fmtSize(file.size) + ')');
+      setTimeout(() => hideStatusBar(), 2000);
       $('input')?.focus();
     } catch (e) {
       addSystemMsg('Upload failed (' + file.name + '): ' + e.message);
@@ -1514,10 +1735,23 @@ function _fmtSize(bytes) {
 async function sendMessage() {
   const el = $('input');
   const text = el.value.trim();
-  if ((!text && _pendingFiles.length === 0) || !ws || !activeConvId || isConvStreaming(activeConvId)) return;
+  if ((!text && _pendingFiles.length === 0) || !ws || !activeConvId || _sending) return;
 
   const conv = conversations[activeConvId];
   if (!conv?.hermesSid) { addSystemMsg('Session expired'); return; }
+
+  // Acquire send lock
+  _sending = true;
+  try {
+
+  // Auto-compress when history grows large
+  if (conv.messages.length > 80) {
+    rpc('session.compress', { session_id: conv.hermesSid }).then(() => {
+      conv.messages = conv.messages.slice(-20);
+      save(); renderMessages();
+      addSystemMsg('History compressed');
+    }).catch(() => {});
+  }
 
   // Build display text and prompt text BEFORE clearing pending files
   const displayText = text || '';
@@ -1547,6 +1781,8 @@ async function sendMessage() {
       addAssistantMsg(JSON.stringify(result)); enableInput();
     }
   } catch (e) { addSystemMsg('Send failed: ' + e.message); enableInput(); }
+
+  } finally { _sending = false; }
 }
 
 // ── Rendering ──
@@ -1706,6 +1942,7 @@ function setConn(state) {
 
 function enableInput() {
   if (isConvStreaming(activeConvId)) return;
+  _sending = false;  // Release send lock when input re-enables
   $('input').disabled = false; $('sendBtn').disabled = false;
   $('attachBtn').disabled = false; $('undoBtn').disabled = false;
   const tb = $('thinkingBar'); if (tb) tb.style.display = 'none';
@@ -1727,8 +1964,27 @@ function showToolThinking(toolName) {
   const tb = $('thinkingBar');
   if (tb) {
     tb.style.display = 'flex';
+    tb.style.background = ''; tb.style.borderColor = '';
     const tt = $('thinkingText');
     if (tt) tt.textContent = 'Running: ' + toolName;
+  }
+}
+
+function showStatusBar(text) {
+  const tb = $('thinkingBar');
+  if (tb) {
+    tb.style.display = 'flex';
+    tb.style.background = ''; tb.style.borderColor = '';
+    const tt = $('thinkingText');
+    if (tt) tt.textContent = text;
+  }
+}
+
+function hideStatusBar() {
+  const tb = $('thinkingBar');
+  if (tb) {
+    tb.style.display = 'none';
+    tb.style.background = ''; tb.style.borderColor = '';
   }
 }
 
@@ -2129,7 +2385,8 @@ async function settingsSwitchModel(val) {
     const [provider, model] = val.split('|');
     await hermesHTTP('POST', '/api/model/set', { scope: 'main', provider, model });
     currentModel = model;
-    addSystemMsg('Model switched to ' + model);
+    showStatusBar('Model switched to ' + model);
+    setTimeout(() => hideStatusBar(), 2000);
     loadSettingsModel();
   } catch (e) {
     addSystemMsg('Switch failed: ' + e.message);
