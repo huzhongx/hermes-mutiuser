@@ -11,21 +11,23 @@
                                │
               ┌────────────────┼────────────────┐
               │                │                │
-     /auth/*  │       /broker/*│         /hermes/ws/{port}
+     /auth/*  │       /api/*   │         /hermes/ws/{port}
+              │   (Web Proxy)  │         (internal only)
               │                │                │
      ┌────────▼───────┐       │                │
      │ Process Broker │       │                │
-     │  (:8080)       │       │                │
-     └───────┬────────┘       │                │
-             │ 分配进程        │                │
-    ┌────────▼────────▼───────▼────────────────┐
+     │  (:8080)       ├───────┘                │
+     │ + Web Proxy    │                        │
+     └───────┬────────┘                        │
+             │ 分配进程 + 代理转发               │
+    ┌────────▼────────▼────────────────────────┐
     │   Hermes Dashboard x N  (ports 9119-9200) │
     │   WS JSON-RPC + HTTP REST API             │
     └───────────────────────────────────────────┘
 ```
 
-- **Process Broker** (`hermes_broker.py`): 按用户分配 Hermes dashboard 进程，维护预热池，空闲超时自动回收
-- **Chat UI** (`chat.html`): 单页应用，连接 Broker 获取进程后直接与 Hermes 通信
+- **Process Broker + Web Proxy** (`hermes_broker.py`): 按用户分配 Hermes dashboard 进程，维护预热池，空闲超时自动回收。同时作为对外唯一安全入口，代理所有 WS/HTTP 请求，隐藏内部端口和 token
+- **Chat UI** (`chat.html`): 单页应用，通过 `/api/*` 代理层与 Hermes 通信，支持交互式面板（澄清、审批、sudo、密钥）
 - **Nginx**: 反向代理，路由 WS/HTTP 请求到对应端口
 
 ## 功能
@@ -36,13 +38,16 @@
 - **会话持久化**: 通过 sessionKey 恢复历史上下文
 - **流式响应**: WS 事件驱动，支持多会话并行流式
 - **Markdown 渲染**: 代码高亮 + 复制按钮，流式输出实时渲染
-- **文件上传**: 上传文件到 Hermes 工作目录，结合对话使用
+- **文件上传**: 上传文件到 Hermes 工作目录，结合对话使用（最大 50MB）
+- **交互式面板**: Agent 可发起澄清问题（clarify）、命令审批（approval）、sudo 密码、密钥/凭证请求，用户通过弹窗交互回复
 - **定时任务**: 用户友好的频率设置（每 N 分钟/每小时/每天/每周/自定义 cron）
 - **自定义模型**: 支持添加自定义模型提供商（OpenAI 兼容）
-- **技能管理**: 搜索、安装、启用/禁用 Hermes 技能
+- **技能管理**: 搜索、安装、启用/禁用 Hermes 技能（系统/用户分类展示）
+- **Web Proxy 安全层**: 对外唯一 `/api/*` 入口，隐藏内部端口和 token
 - **HTTP API 集成**: 服务端加载会话列表、历史消息、HTTP 删除
 - **心跳保活 + 断线自动重连**（指数退避）
 - **预热池**: 减少冷启动延迟
+- **自动压缩**: 会话消息超过 80 条时自动压缩历史以节省 token
 
 ## 快速开始
 
@@ -125,7 +130,12 @@ sudo nginx -t && sudo systemctl reload nginx
 | `session.resume` | 恢复历史会话（参数为 sessionKey） |
 | `session.close` | 关闭活跃会话 |
 | `session.list` | 列出会话 |
+| `session.compress` | 压缩历史消息 |
 | `prompt.submit` | 发送消息，触发流式响应 |
+| `clarify.respond` | 回答 Agent 澄清问题 |
+| `approval.respond` | 命令审批（允许/拒绝） |
+| `sudo.respond` | 提供 sudo 密码 |
+| `secret.respond` | 提供密钥/凭证 |
 | `image.attach` | 附加图片文件 |
 | `input.detect_drop` | 注册拖放文件 |
 | `skills.manage` | 技能搜索/安装/浏览 |
