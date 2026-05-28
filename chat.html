@@ -919,7 +919,7 @@ async function detectAuthMode() {
   return null;
 }
 
-async function connect(uid) {
+async function connect(uid, silent) {
   const url = window.location.origin;
   if (!_oauthMode && !uid) {
     uid = $('userId')?.value?.trim();
@@ -928,7 +928,7 @@ async function connect(uid) {
   if (uid) _currentUid = uid;
 
   setConn('connecting');
-  showLoading('alloc');
+  if (!silent) showLoading('alloc');
 
   try {
     const fetchOpts = {
@@ -940,7 +940,7 @@ async function connect(uid) {
 
     let resp = await fetch(url + '/api/sessions', fetchOpts);
     if (resp.status === 401) {
-      hideLoading();
+      if (!silent) hideLoading();
       window.location.href = url + '/auth/github';
       return;
     }
@@ -949,14 +949,14 @@ async function connect(uid) {
 
     const effectiveUid = brokerInfo.user_id || uid || 'user';
 
-    showLoading('load');
+    if (!silent) showLoading('load');
     load(effectiveUid);
     await loadServerSessions();
 
-    showLoading('ws');
+    if (!silent) showLoading('ws');
     await connectWS();
 
-    showLoading('model');
+    if (!silent) showLoading('model');
     await loadModelInfo();
 
     $('btnNewChat').style.display = '';
@@ -973,7 +973,7 @@ async function connect(uid) {
         const conv = conversations[id];
         if (conv.sessionKey) {
           try {
-            showLoading('resume');
+            if (!silent) showLoading('resume');
             const result = await rpc('session.resume', { session_id: conv.sessionKey });
             conv.hermesSid = result.session_id;
             resumed = true;
@@ -990,9 +990,9 @@ async function connect(uid) {
     } else {
       await newConversation();
     }
-    hideLoading();
+    if (!silent) hideLoading();
   } catch (e) {
-    hideLoading();
+    if (!silent) hideLoading();
     setConn('error');
     addSystemMsg('Connection failed: ' + e.message);
   }
@@ -2422,9 +2422,9 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape' && $('setting
     const oauth = $('oauthSection'); if (oauth) oauth.style.display = '';
     const legacy = $('legacySection'); if (legacy) legacy.style.display = 'none';
     if (user) {
-      // Already logged in — hide welcome screen immediately, auto-connect
+      // Already logged in — silent reconnect, skip loading overlay
       const ws = $('welcomeScreen'); if (ws) ws.style.display = 'none';
-      connect(user.sub);
+      connect(user.sub, true);
     }
   } else {
     // Legacy mode — show username form
