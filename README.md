@@ -153,6 +153,41 @@ sudo nginx -t && sudo systemctl reload nginx
 
 ## 配置
 
+### Hermes 用户配置（config.yaml）
+
+每个用户的 Hermes 配置文件位于 `{SESSIONS_ROOT}/{user_id}/hermes_home/config.yaml`。以下是关键配置项：
+
+```yaml
+# 模型设置
+model:
+  default: glm-5.1                    # 默认模型
+  provider: custom:openclaw-router    # 提供商
+  base_url: ''
+  context_length: 200000              # 上下文窗口大小（tokens），避免自动探测失败
+
+# 自定义提供商
+custom_providers:
+  - name: openclaw-router
+    base_url: https://your-domain.com/v1
+    model: glm-5.1
+    api_key: your-api-key
+
+# 代码执行沙箱
+code_execution:
+  mode: project          # project=使用项目目录和venv, strict=隔离临时目录
+  timeout: 600           # 执行超时（秒），轮询类脚本需要设大（默认300不够）
+  max_tool_calls: 50     # 单次脚本最大工具调用次数
+```
+
+> **注意事项**：
+> - `model.context_length` 建议显式设置，否则每次启动会探测 API 并 fallback 到 256K
+> - `code_execution.timeout` 如果用户脚本中有轮询等待逻辑（如等待 API 状态变化），300s 可能不够用，建议调大到 600s
+> - 修改配置后需要通过 broker 释放并重新分配 session 才能生效：
+>   ```bash
+>   curl -X DELETE http://127.0.0.1:8080/broker/sessions/{user_id}
+>   curl -X POST http://127.0.0.1:8080/broker/sessions -H "Content-Type: application/json" -d '{"user_id":"{user_id}"}'
+>   ```
+
 ### 环境变量
 
 | 变量 | 默认值 | 说明 |
