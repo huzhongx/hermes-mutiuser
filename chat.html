@@ -2440,12 +2440,12 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape' && $('setting
 // Save username on connect (legacy mode only)
 (function() {
   const _orig = connect;
-  connect = async function(uid) {
+  connect = async function(uid, silent) {
     if (!_oauthMode) {
       const u = uid || $('userId')?.value?.trim();
       if (u) localStorage.setItem('hermes_last_uid', u);
     }
-    await _orig(uid);
+    await _orig(uid, silent);
   };
 })();
 </script>
