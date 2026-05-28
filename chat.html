@@ -385,26 +385,6 @@ body {
   animation: pulse 1.2s ease-in-out infinite;
 }
 
-/* Tool running card */
-.msg.tool-running {
-  background: linear-gradient(135deg, #fef3ee 0%, #fff7f4 100%);
-  border: 1px solid var(--accent-dim);
-  border-radius: 10px;
-  padding: 8px 14px;
-}
-.msg.tool-running .msg-body {
-  font-size: 12px; color: var(--text); font-style: normal;
-  display: flex; align-items: center; gap: 8px;
-}
-.msg.tool-running .tool-dots span {
-  display: inline-block;
-  width: 5px; height: 5px;
-  background: var(--accent);
-  border-radius: 50%;
-  animation: dotBounce 1.4s ease-in-out infinite;
-}
-.msg.tool-running .tool-dots span:nth-child(2) { animation-delay: 0.2s; }
-.msg.tool-running .tool-dots span:nth-child(3) { animation-delay: 0.4s; }
 
 .msg-usage {
   font-size: 10px;
@@ -685,6 +665,12 @@ body {
 .cron-form-actions { display: flex; gap: 8px; margin-top: 4px; }
 .cron-form-actions .btn { flex: 1; }
 
+.skill-tabs { display: flex; gap: 0; border-bottom: 2px solid var(--border); margin-bottom: 14px; }
+.skill-tab { background: none; border: none; border-bottom: 2px solid transparent; margin-bottom: -2px; padding: 8px 16px; font-size: 13px; font-weight: 500; color: var(--text-dim); cursor: pointer; transition: all .15s; white-space: nowrap; }
+.skill-tab:hover { color: var(--text); }
+.skill-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.skill-tab-panel { display: none; }
+.skill-tab-panel.active { display: block; }
 .skill-search { display: flex; gap: 6px; margin-bottom: 10px; }
 .skill-search input { flex: 1; background: var(--sidebar); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; font-size: 13px; color: var(--text); outline: none; }
 .skill-search input:focus { border-color: var(--accent); }
@@ -1086,10 +1072,6 @@ function handleWS(data, initResolve) {
       if (convId === activeConvId) {
         hideEmpty();
         const toolName = data.params?.payload?.name || 'Unknown';
-        const div = document.createElement('div'); div.className = 'msg tool-running';
-        div.innerHTML = `<div class="msg-body"><span class="tool-dots"><span></span><span></span><span></span></span><span>Running: <strong>${esc(toolName)}</strong></span></div>`;
-        div.id = 'toolRun_' + toolName.replace(/\W/g, '_');
-        $('messages').appendChild(div); scrollBottom();
         showToolThinking(toolName);
       }
       return;
@@ -1098,14 +1080,21 @@ function handleWS(data, initResolve) {
       const convId = convByHermesSid(evtSid);
       if (convId === activeConvId) {
         const toolName = data.params?.payload?.name || '';
-        const el = toolName ? document.getElementById('toolRun_' + toolName.replace(/\W/g, '_')) : null;
-        if (el) {
-          el.className = 'msg tool-running';
-          el.querySelector('.tool-dots')?.remove();
-          const label = el.querySelector('strong');
-          if (label) label.parentElement.innerHTML = '<strong>' + esc(toolName) + '</strong> &#10003; Done';
-          el.style.borderColor = 'var(--success)';
-          el.style.background = 'linear-gradient(135deg, #f0fdf4 0%, #fefffe 100%)';
+        const tb = $('thinkingBar');
+        if (tb && tb.style.display !== 'none') {
+          const tt = $('thinkingText');
+          if (tt) tt.innerHTML = '<span style="color:var(--success)">' + esc(toolName) + ' &#10003;</span>';
+          tb.style.background = 'linear-gradient(135deg, #f0fdf4 0%, #fefffe 100%)';
+          tb.style.borderColor = 'var(--success)';
+          setTimeout(() => {
+            if (isConvStreaming(activeConvId)) {
+              tt.textContent = 'Hermes is responding\u2026';
+              tb.style.background = ''; tb.style.borderColor = '';
+            } else {
+              tb.style.display = 'none';
+              tb.style.background = ''; tb.style.borderColor = '';
+            }
+          }, 1500);
         }
       }
       return;
@@ -2014,6 +2003,7 @@ async function loadSettingsSkills(highlight) {
     const sysSkills = list.filter(s => !s.user_installed);
     const userSkills = list.filter(s => s.user_installed);
 
+    // ── Top: Search & Install (always visible) ──
     let html = '<div class="s-card"><div class="s-card-title">Search & Install</div>';
     html += '<div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">Search from Hermes ACP Registry (hermes.acp.community) for community skills, agents, and integrations.</div>';
     html += '<div class="skill-search">';
@@ -2028,9 +2018,15 @@ async function loadSettingsSkills(highlight) {
     html += '<span id="skillUploadMsg" style="font-size:12px;margin-left:8px"></span>';
     html += '</div></div>';
 
-    // System skills section
-    html += '<div class="s-card"><div class="s-card-title">System Skills (' + sysSkills.length + ')</div>';
-    html += '<div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">Pre-installed, shared across all users</div>';
+    // ── Bottom: Installed Skills (tab switching) ──
+    html += '<div class="skill-tabs">';
+    html += '<button class="skill-tab active" onclick="switchSkillTab(\'system\',this)">System (' + sysSkills.length + ')</button>';
+    html += '<button class="skill-tab" onclick="switchSkillTab(\'user\',this)">My Skills (' + userSkills.length + ')</button>';
+    html += '</div>';
+
+    // Tab: System Skills
+    html += '<div class="skill-tab-panel active" id="skillPanelSystem">';
+    html += '<div class="s-card"><div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">Pre-installed, shared across all users</div>';
     if (sysSkills.length === 0) {
       html += '<div class="s-empty">No system skills</div>';
     } else {
@@ -2042,13 +2038,13 @@ async function loadSettingsSkills(highlight) {
         </div>`;
       }
     }
-    html += '</div>';
+    html += '</div></div>';
 
-    // User-installed skills section
-    html += '<div class="s-card"><div class="s-card-title">My Skills (' + userSkills.length + ')</div>';
-    html += '<div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">Installed by you, can be modified or removed</div>';
+    // Tab: My Skills
+    html += '<div class="skill-tab-panel" id="skillPanelUser">';
+    html += '<div class="s-card"><div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">Installed by you, can be modified or removed</div>';
     if (userSkills.length === 0) {
-      html += '<div class="s-empty">No user-installed skills. Upload a .zip or search above to install.</div>';
+      html += '<div class="s-empty">No user-installed skills yet. Use search or upload above to add skills.</div>';
     } else {
       for (const s of userSkills) {
         const isNew = s.name === highlight;
@@ -2062,7 +2058,7 @@ async function loadSettingsSkills(highlight) {
         </div>`;
       }
     }
-    html += '</div>';
+    html += '</div></div>';
 
     body.innerHTML = html;
   } catch(e) {
@@ -2214,6 +2210,15 @@ async function toggleSkill(name, enabled) {
   } catch (e) {
     addSystemMsg('Toggle failed: ' + e.message);
   }
+}
+
+function switchSkillTab(tabId, btn) {
+  document.querySelectorAll('.skill-tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.skill-tab-panel').forEach(p => p.classList.remove('active'));
+  btn.classList.add('active');
+  const map = { system: 'skillPanelSystem', user: 'skillPanelUser' };
+  const panel = document.getElementById(map[tabId]);
+  if (panel) panel.classList.add('active');
 }
 
 async function deleteSkill(name) {

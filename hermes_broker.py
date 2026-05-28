@@ -319,13 +319,15 @@ class ProcessBroker:
             if src.is_dir() and not (dst.exists() or dst.is_symlink()):
                 os.symlink(src, dst)
 
-        # Copy per-user directories (mutable, user-specific)
-        # skills: each user manages their own installed skills independently
+        # Skills: symlink system skills from global HERMES_HOME
         for dname in ("skills",):
             src = _HERMES_CONFIG_HOME / dname
             dst = user_home / dname
             if src.is_dir() and not (dst.exists() or dst.is_symlink()):
-                shutil.copytree(str(src), str(dst))
+                dst.mkdir(parents=True, exist_ok=True)
+                for skill_entry in src.iterdir():
+                    if skill_entry.is_dir():
+                        os.symlink(str(skill_entry), str(dst / skill_entry.name))
 
         # Symlink shared files (skill snapshots etc.)
         for fname in (".skills_prompt_snapshot.json",):
@@ -1037,7 +1039,12 @@ async def proxy_skill_upload(request: Request):
             await hermes_ws.send_str(reload_req)
             async for msg in hermes_ws:
                 if msg.type == aiohttp.WSMsgType.TEXT:
-                    break
+                    try:
+                        data = json.loads(msg.data)
+                        if data.get("id") == "_skill_reload":
+                            break
+                    except Exception:
+                        break
     except Exception as e:
         logger.warning(f"[{proc.user_id}] skills.reload failed after upload: {e}")
 
@@ -1046,10 +1053,46 @@ async def proxy_skill_upload(request: Request):
 
 @app.get("/api/skills/list")
 async def proxy_skills_list(request: Request):
-    """List skills with system/user classification."""
+    """List skills with system/user classification. Syncs new system skills automatically."""
     proc = await _proc_for_request(request)
     user_home = Path(proc.work_dir).parent / "hermes_home"
     user_skills_dir = user_home / "skills"
+    global_skills_dir = _HERMES_CONFIG_HOME / "skills"
+
+    # Sync: ensure system skills are symlinks to global HERMES_HOME
+    needs_reload = False
+    if global_skills_dir.is_dir():
+        for skill_entry in global_skills_dir.iterdir():
+            if not skill_entry.is_dir():
+                continue
+            user_skill = user_skills_dir / skill_entry.name
+            if not user_skill.exists():
+                os.symlink(str(skill_entry), str(user_skill))
+                logger.info(f"[{proc.user_id}] Synced system skill: {skill_entry.name}")
+                needs_reload = True
+            elif user_skill.is_dir() and not user_skill.is_symlink():
+                # Old copy from before symlink migration — replace with symlink
+                shutil.rmtree(str(user_skill))
+                os.symlink(str(skill_entry), str(user_skill))
+                logger.info(f"[{proc.user_id}] Migrated system skill to symlink: {skill_entry.name}")
+                needs_reload = True
+
+    if needs_reload:
+        try:
+            ws_url = f"ws://127.0.0.1:{proc.port}/api/ws?token={proc.ws_token}"
+            session = await _get_proxy_http()
+            async with session.ws_connect(ws_url) as ws:
+                await ws.send_str(json.dumps({"jsonrpc": "2.0", "id": "_sync_reload", "method": "skills.reload", "params": {}}))
+                async for msg in ws:
+                    if msg.type == aiohttp.WSMsgType.TEXT:
+                        try:
+                            data = json.loads(msg.data)
+                            if data.get("id") == "_sync_reload":
+                                break
+                        except Exception:
+                            break
+        except Exception as e:
+            logger.warning(f"[{proc.user_id}] skills.reload after sync failed: {e}")
 
     # Get skills from Hermes process
     session = await _get_proxy_http()
@@ -1091,7 +1134,12 @@ async def proxy_skill_delete(skill_name: str, request: Request):
             await hermes_ws.send_str(json.dumps({"jsonrpc": "2.0", "id": "_skill_del", "method": "skills.reload", "params": {}}))
             async for msg in hermes_ws:
                 if msg.type == aiohttp.WSMsgType.TEXT:
-                    break
+                    try:
+                        data = json.loads(msg.data)
+                        if data.get("id") == "_skill_del":
+                            break
+                    except Exception:
+                        break
     except Exception as e:
         logger.warning(f"[{proc.user_id}] skills.reload after delete failed: {e}")
 
