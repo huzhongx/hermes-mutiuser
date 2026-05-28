@@ -770,10 +770,6 @@ body {
       </div>
       <div id="legacySection" style="display:none">
         <div class="field">
-          <label>Server</label>
-          <input id="brokerUrl" value="https://huzhongxiang.cloud" placeholder="https://host:port">
-        </div>
-        <div class="field">
           <label>Username</label>
           <input id="userId" value="" placeholder="Enter username">
         </div>
@@ -924,7 +920,7 @@ async function detectAuthMode() {
 }
 
 async function connect(uid) {
-  const url = _oauthMode ? window.location.origin : ($('brokerUrl')?.value || window.location.origin).replace(/\/+$/, '');
+  const url = window.location.origin;
   if (!_oauthMode && !uid) {
     uid = $('userId')?.value?.trim();
     if (!uid) { $('userId')?.focus(); return; }
@@ -939,27 +935,18 @@ async function connect(uid) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(_oauthMode ? {} : { user_id: uid }),
+      credentials: 'include',
     };
-    if (_oauthMode) fetchOpts.credentials = 'include';
 
-    let resp = await fetch(url + '/broker/sessions', fetchOpts);
+    let resp = await fetch(url + '/api/sessions', fetchOpts);
     if (resp.status === 401) {
       hideLoading();
       window.location.href = url + '/auth/github';
       return;
     }
-    if (resp.ok) {
-      brokerInfo = await resp.json();
-    } else {
-      // Fallback: try GET (existing session)
-      const getUserId = _oauthMode ? '' : uid;
-      const getOpts = _oauthMode ? { credentials: 'include' } : {};
-      resp = await fetch(url + '/broker/sessions/' + getUserId, getOpts);
-      if (!resp.ok) throw new Error('Failed to allocate process');
-      brokerInfo = await resp.json();
-    }
+    if (!resp.ok) throw new Error('Failed to allocate process');
+    brokerInfo = await resp.json();
 
-    // Determine effective user_id
     const effectiveUid = brokerInfo.user_id || uid || 'user';
 
     showLoading('load');
@@ -967,7 +954,7 @@ async function connect(uid) {
     await loadServerSessions();
 
     showLoading('ws');
-    await connectWS(brokerInfo.ws_url);
+    await connectWS();
 
     showLoading('model');
     await loadModelInfo();
@@ -1011,10 +998,11 @@ async function connect(uid) {
   }
 }
 
-function connectWS(url) {
+function connectWS() {
   return new Promise((resolve, reject) => {
     _userDisconnect = false;
-    ws = new WebSocket(url);
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws = new WebSocket(proto + '//' + location.host + '/api/ws');
     ws.onopen = () => { setConn('connected'); startHeartbeat(); };
     ws.onmessage = (e) => handleWS(JSON.parse(e.data), resolve);
     ws.onerror = () => { setConn('error'); stopHeartbeat(); reject(new Error('WS error')); };
@@ -1153,9 +1141,9 @@ function rpc(method, params, timeout) {
 
 async function hermesHTTP(method, path, body) {
   if (!brokerInfo) throw new Error('Not connected');
-  const opts = { method, headers: { 'Authorization': 'Bearer ' + brokerInfo.ws_token } };
-  if (body) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
-  const resp = await fetch(brokerInfo.http_url + path, opts);
+  const opts = { method, credentials: 'include' };
+  if (body) { opts.headers = { 'Content-Type': 'application/json' }; opts.body = JSON.stringify(body); }
+  const resp = await fetch(path, opts);
   if (!resp.ok) throw new Error('HTTP ' + resp.status);
   const text = await resp.text();
   try { return JSON.parse(text); } catch(e) { return { raw: text }; }
@@ -1254,16 +1242,10 @@ async function autoReconnect() {
 
   _reconnectTimer = setTimeout(async () => {
     try {
-      const url = $('brokerUrl').value.replace(/\/+$/, '');
-      const uid = $('userId').value.trim();
-      let resp = await fetch(url + '/broker/sessions/' + uid);
-      if (resp.ok) { brokerInfo = await resp.json(); }
-      else {
-        resp = await fetch(url + '/broker/sessions', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({user_id:uid}) });
-        if (!resp.ok) throw new Error('Failed to reassign process');
-        brokerInfo = await resp.json();
-      }
-      await connectWS(brokerInfo.ws_url);
+      let resp = await fetch('/api/sessions', { method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}', credentials: 'include' });
+      if (!resp.ok) throw new Error('Failed to reassign process');
+      brokerInfo = await resp.json();
+      await connectWS();
       _reconnectAttempts = 0;
       if (activeConvId && conversations[activeConvId]?.sessionKey) {
         try {
@@ -1286,11 +1268,7 @@ async function disconnect() {
   if (ws) { ws.close(); ws = null; }
   if (brokerInfo) {
     try {
-      const url = _oauthMode ? window.location.origin : ($('brokerUrl')?.value || window.location.origin).replace(/\/+$/, '');
-      const getUserId = _oauthMode ? '' : ($('userId')?.value?.trim() || '');
-      const opts = { method: 'DELETE' };
-      if (_oauthMode) opts.credentials = 'include';
-      await fetch(url + '/broker/sessions/' + getUserId, opts);
+      await fetch('/api/sessions', { method: 'DELETE', credentials: 'include' });
     } catch(e) {}
     brokerInfo = null;
   }
@@ -1491,12 +1469,9 @@ async function uploadFiles(fileList) {
     try {
       const formData = new FormData();
       formData.append('file', file);
-      const opts = { method: 'POST', body: formData };
-      if (_oauthMode) opts.credentials = 'include';
-      else opts.headers = { 'X-User-ID': brokerInfo.user_id };
+      const opts = { method: 'POST', body: formData, credentials: 'include' };
 
-      const base = window.location.origin;
-      const r = await fetch(base + '/broker/upload', opts);
+      const r = await fetch('/api/upload', opts);
       if (!r.ok) throw new Error('Upload failed: HTTP ' + r.status);
       const result = await r.json();
 
@@ -1801,7 +1776,7 @@ function esc(s) { const d = document.createElement('div'); d.textContent = s; re
 
 function _renderAttachments(files) {
   return '<div class="msg-attachments">' + files.map(f => {
-    const url = f.path && _currentUid ? window.location.origin + '/broker/files/' + encodeURIComponent(_currentUid) + '/' + encodeURIComponent(f.name) : '#';
+    const url = '/api/files/' + encodeURIComponent(f.name);
     const target = f.isImage ? ' target="_blank"' : '';
     return `<a class="att-card" href="${url}" download="${esc(f.name)}"${target}><span class="att-icon">${f.isImage ? '&#128247;' : '&#128196;'}</span><div class="att-info"><span class="att-name">${esc(f.name)}</span><span class="att-size">${_fmtSize(f.size)}</span></div></a>`;
   }).join('') + '</div>';
@@ -2459,8 +2434,6 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape' && $('setting
     if (saved) { const el = $('userId'); if (el) el.value = saved; }
     const uidInput = $('userId');
     if (uidInput) uidInput.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) connect(); });
-    const urlInput = $('brokerUrl');
-    if (urlInput) urlInput.addEventListener('keydown', e => { if (e.key === 'Enter') uidInput?.focus(); });
   }
 })();
 

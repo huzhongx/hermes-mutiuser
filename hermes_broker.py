@@ -35,8 +35,8 @@ from typing import Dict, Optional, Set
 import aiohttp
 import jwt as pyjwt
 import requests as req_lib
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel
 
 logging.basicConfig(
@@ -744,6 +744,228 @@ async def health():
 @app.get("/broker/stats")
 async def stats():
     return broker.stats()
+
+
+# ─────────────────────────────────────────────────────────
+# Proxy API — 对外唯一入口，隐藏内部端口/token
+# ─────────────────────────────────────────────────────────
+
+# aiohttp session for backend HTTP calls (reused)
+_proxy_http: Optional[aiohttp.ClientSession] = None
+
+
+async def _get_proxy_http() -> aiohttp.ClientSession:
+    global _proxy_http
+    if _proxy_http is None or _proxy_http.closed:
+        _proxy_http = aiohttp.ClientSession()
+    return _proxy_http
+
+
+async def _proc_for_request(request: Request) -> HermesProcess:
+    """Authenticate and return the user's process. Supports JWT cookie and legacy user_id."""
+    user = _get_session_user(request)
+    if user:
+        user_id = user["sub"]
+    else:
+        # Legacy fallback: try header first, then body
+        user_id = request.headers.get("X-User-ID", "")
+        if not user_id:
+            try:
+                body = await request.json()
+                user_id = (body or {}).get("user_id", "")
+            except Exception:
+                pass
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    proc = broker.get(user_id)
+    if not proc:
+        raise HTTPException(status_code=404, detail="No active session")
+    proc.touch()
+    return proc
+
+
+async def _hermes_http(proc: HermesProcess, method: str, path: str,
+                       body: bytes = b"", content_type: str = "") -> Response:
+    """Forward an HTTP request to the user's Hermes process."""
+    url = f"http://127.0.0.1:{proc.port}{path}"
+    headers = {"Authorization": f"Bearer {proc.ws_token}"}
+    if content_type:
+        headers["Content-Type"] = content_type
+    session = await _get_proxy_http()
+    async with session.request(method, url, headers=headers, data=body) as resp:
+        resp_body = await resp.read()
+        return Response(
+            content=resp_body,
+            status_code=resp.status,
+            media_type=resp.headers.get("Content-Type", "application/json"),
+        )
+
+
+# ── Session allocation (no sensitive info exposed) ────────
+
+@app.post("/api/sessions")
+async def proxy_acquire(request: Request):
+    """Allocate a Hermes process. Returns only safe fields."""
+    # Auth: JWT cookie preferred, fallback to body.user_id
+    user = _get_session_user(request)
+    if user:
+        user_id = user["sub"]
+    else:
+        try:
+            body = await request.json()
+            user_id = (body or {}).get("user_id", "")
+        except Exception:
+            user_id = ""
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        proc = await broker.acquire(user_id)
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    return {
+        "user_id": proc.user_id,
+        "status": proc.status,
+        "created_at": proc.created_at,
+    }
+
+
+@app.delete("/api/sessions")
+async def proxy_release(request: Request):
+    """Release the user's Hermes process."""
+    user = _get_session_user(request)
+    if user:
+        user_id = user["sub"]
+    else:
+        user_id = request.headers.get("X-User-ID", "")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    await broker.release(user_id)
+    return {"status": "released"}
+
+
+# ── WebSocket proxy ──────────────────────────────────────
+
+@app.websocket("/api/ws")
+async def ws_proxy(websocket: WebSocket):
+    """Bidirectional WS proxy: browser ←→ Hermes process."""
+    # Auth: read cookie from handshake headers
+    cookie_header = websocket.headers.get("cookie", "")
+    token = None
+    for part in cookie_header.split(";"):
+        k, _, v = part.strip().partition("=")
+        if k == "hermes_session":
+            token = v
+            break
+    if not token:
+        await websocket.close(code=4001, reason="Not authenticated")
+        return
+    user = _verify_jwt(token)
+    if not user:
+        await websocket.close(code=4001, reason="Invalid session")
+        return
+    proc = broker.get(user["sub"])
+    if not proc:
+        await websocket.close(code=4004, reason="No active session")
+        return
+    proc.touch()
+
+    await websocket.accept()
+
+    hermes_url = f"ws://127.0.0.1:{proc.port}/api/ws?token={proc.ws_token}"
+    session = await _get_proxy_http()
+    try:
+        async with session.ws_connect(hermes_url, max_msg_size=0) as hermes_ws:
+
+            async def forward_to_hermes():
+                try:
+                    while True:
+                        data = await websocket.receive_text()
+                        await hermes_ws.send_str(data)
+                except (WebSocketDisconnect, Exception):
+                    pass
+                finally:
+                    try:
+                        await hermes_ws.close()
+                    except Exception:
+                        pass
+
+            async def forward_to_browser():
+                try:
+                    async for msg in hermes_ws:
+                        if msg.type == aiohttp.WSMsgType.TEXT:
+                            await websocket.send_text(msg.data)
+                        elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                            break
+                except Exception:
+                    pass
+                finally:
+                    try:
+                        await websocket.close()
+                    except Exception:
+                        pass
+
+            await asyncio.gather(
+                forward_to_hermes(),
+                forward_to_browser(),
+                return_exceptions=True,
+            )
+    except Exception as e:
+        logger.warning(f"WS proxy error for {user['sub']}: {e}")
+        try:
+            await websocket.close(code=1011, reason="Proxy error")
+        except Exception:
+            pass
+
+
+# ── Generic HTTP proxy catch-all ─────────────────────────
+
+@app.api_route("/api/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+async def proxy_api(request: Request, path: str):
+    """
+    Proxy /api/* to user's Hermes process.
+    Auto-prefixes /api/ back when forwarding.
+    """
+    proc = await _proc_for_request(request)
+    body = await request.body()
+    ct = request.headers.get("content-type", "")
+    return await _hermes_http(proc, request.method, f"/api/{path}", body, ct)
+
+
+# ── File upload/download via proxy ───────────────────────
+
+@app.post("/api/upload")
+async def proxy_upload(request: Request):
+    """Upload file to user's process. Same logic as /broker/upload but JWT-only."""
+    proc = await _proc_for_request(request)
+    ct = request.headers.get("content-type", "")
+    if not ct.startswith("multipart/form-data"):
+        raise HTTPException(status_code=400, detail="multipart/form-data required")
+
+    form = await request.form()
+    upload = form.get("file")
+    if not upload or not upload.filename:
+        raise HTTPException(status_code=400, detail="file field required")
+
+    uploads_dir = Path(proc.work_dir) / "uploads"
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+
+    safe_name = re.sub(r'[^\w.\-]', '_', upload.filename)
+    dest = uploads_dir / safe_name
+    content = await upload.read()
+    dest.write_bytes(content)
+
+    logger.info(f"[{proc.user_id}] File uploaded: {dest} ({len(content)} bytes)")
+    return {"name": safe_name, "size": len(content)}
+
+
+@app.get("/api/files/{filename}")
+async def proxy_download(filename: str, request: Request):
+    """Serve an uploaded file for download (JWT auth)."""
+    proc = await _proc_for_request(request)
+    fpath = Path(proc.work_dir) / "uploads" / filename
+    if not fpath.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(str(fpath), filename=filename)
 
 
 if __name__ == "__main__":
