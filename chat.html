@@ -2018,7 +2018,13 @@ async function loadSettingsSkills(highlight) {
     html += '<input id="skillSearchInput" placeholder="Search skills to install\u2026" onkeydown="if(event.key===\'Enter\'&&!event.isComposing)searchSkills()">';
     html += '<button type="button" onclick="searchSkills()">Search</button>';
     html += '</div>';
-    html += '<div id="skillSearchResults"></div></div>';
+    html += '<div id="skillSearchResults"></div>';
+    html += '<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">';
+    html += '<div style="font-size:12px;color:var(--text-dim);margin-bottom:6px">Or upload a skill .zip package:</div>';
+    html += '<input type="file" id="skillZipInput" accept=".zip" style="display:none" onchange="uploadSkillZip(event)">';
+    html += '<button class="cron-btn" style="border-color:var(--accent);color:var(--accent)" onclick="$(\'skillZipInput\').click()">Upload .zip</button>';
+    html += '<span id="skillUploadMsg" style="font-size:12px;margin-left:8px"></span>';
+    html += '</div></div>';
 
     html += '<div class="s-card"><div class="s-card-title">Installed Skills (' + list.length + ')</div>';
     if (list.length === 0) {
@@ -2302,6 +2308,30 @@ async function installSkillByName(name) {
   } catch (e) {
     if (btn) { btn.disabled = false; btn.textContent = 'Install'; }
     addSystemMsg('Install failed: ' + e.message);
+  }
+}
+
+async function uploadSkillZip(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  event.target.value = '';
+  const msg = $('skillUploadMsg');
+  if (msg) { msg.style.color = 'var(--text-dim)'; msg.textContent = 'Uploading\u2026'; }
+  try {
+    const formData = new FormData();
+    formData.append('file', file);
+    const r = await fetch('/api/skills/upload', { method: 'POST', body: formData, credentials: 'include' });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.detail || 'Upload failed');
+    }
+    const result = await r.json();
+    if (msg) { msg.style.color = 'var(--success)'; msg.textContent = result.name + ' installed'; }
+    addSystemMsg('Skill installed: ' + result.name);
+    loadSettingsSkills(result.name);
+  } catch (e) {
+    if (msg) { msg.style.color = 'var(--danger)'; msg.textContent = e.message; }
+    addSystemMsg('Skill upload failed: ' + e.message);
   }
 }
 

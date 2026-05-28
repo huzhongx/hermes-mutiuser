@@ -25,6 +25,7 @@ import os
 import re
 import secrets
 import shutil
+import zipfile
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -966,6 +967,77 @@ async def proxy_download(filename: str, request: Request):
     if not fpath.is_file():
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(str(fpath), filename=filename)
+
+
+@app.post("/api/skills/upload")
+async def proxy_skill_upload(request: Request):
+    """Upload a skill zip and install to user's Hermes skills directory."""
+    proc = await _proc_for_request(request)
+    ct = request.headers.get("content-type", "")
+    if not ct.startswith("multipart/form-data"):
+        raise HTTPException(status_code=400, detail="multipart/form-data required")
+
+    form = await request.form()
+    upload = form.get("file")
+    if not upload or not upload.filename:
+        raise HTTPException(status_code=400, detail="file field required")
+
+    if not upload.filename.endswith(".zip"):
+        raise HTTPException(status_code=400, detail="Only .zip files are supported")
+
+    content = await upload.read()
+
+    # Determine skills directory: {hermes_home}/skills/
+    user_home = Path(proc.work_dir).parent / "hermes_home"
+    skills_dir = user_home / "skills"
+    skills_dir.mkdir(parents=True, exist_ok=True)
+
+    # Extract zip
+    import tempfile
+    skill_name = ""
+    with tempfile.TemporaryDirectory() as tmp:
+        zip_path = Path(tmp) / "upload.zip"
+        zip_path.write_bytes(content)
+        try:
+            with zipfile.ZipFile(str(zip_path), "r") as zf:
+                zf.extractall(tmp)
+        except zipfile.BadZipFile:
+            raise HTTPException(status_code=400, detail="Invalid zip file")
+
+        # Find skill directory: either root of zip or single top-level dir
+        entries = [p for p in Path(tmp).iterdir() if p.name != "upload.zip"]
+        if len(entries) == 1 and entries[0].is_dir():
+            src_dir = entries[0]
+        else:
+            src_dir = Path(tmp)
+
+        # Validate: must have SKILL.md
+        if not (src_dir / "SKILL.md").exists():
+            raise HTTPException(status_code=400, detail="Invalid skill: missing SKILL.md")
+
+        skill_name = src_dir.name
+        dest = skills_dir / skill_name
+        if dest.exists():
+            shutil.rmtree(str(dest))
+        shutil.copytree(str(src_dir), str(dest))
+
+    logger.info(f"[{proc.user_id}] Skill installed: {skill_name}")
+
+    # Trigger skills.reload via WS
+    try:
+        import json
+        ws_url = f"ws://127.0.0.1:{proc.port}/api/ws?token={proc.ws_token}"
+        session = await _get_proxy_http()
+        async with session.ws_connect(ws_url) as hermes_ws:
+            reload_req = json.dumps({"jsonrpc": "2.0", "id": "_skill_reload", "method": "skills.reload", "params": {}})
+            await hermes_ws.send_str(reload_req)
+            async for msg in hermes_ws:
+                if msg.type == aiohttp.WSMsgType.TEXT:
+                    break
+    except Exception as e:
+        logger.warning(f"[{proc.user_id}] skills.reload failed after upload: {e}")
+
+    return {"status": "installed", "name": skill_name}
 
 
 if __name__ == "__main__":
