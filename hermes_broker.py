@@ -995,6 +995,7 @@ async def proxy_skill_upload(request: Request):
         # Filter out the zip file itself, hidden dirs (__MACOSX), and macOS metadata
         _skip = {"upload.zip", "__MACOSX", ".DS_Store"}
         entries = [p for p in Path(tmp).iterdir() if p.name not in _skip and not p.name.startswith(".")]
+        logger.info(f"[{proc.user_id}] Zip entries: {[e.name for e in entries]}, all: {[p.name for p in Path(tmp).iterdir()]}")
         if len(entries) == 1 and entries[0].is_dir():
             src_dir = entries[0]
         elif len(entries) == 0:
