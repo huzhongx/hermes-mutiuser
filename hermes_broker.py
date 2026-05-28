@@ -918,19 +918,6 @@ async def ws_proxy(websocket: WebSocket):
             pass
 
 
-# ── Generic HTTP proxy catch-all ─────────────────────────
-
-@app.api_route("/api/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
-async def proxy_api(request: Request, path: str):
-    """
-    Proxy /api/* to user's Hermes process.
-    Auto-prefixes /api/ back when forwarding.
-    """
-    proc = await _proc_for_request(request)
-    body = await request.body()
-    ct = request.headers.get("content-type", "")
-    return await _hermes_http(proc, request.method, f"/api/{path}", body, ct)
-
 
 # ── File upload/download via proxy ───────────────────────
 
@@ -1038,6 +1025,20 @@ async def proxy_skill_upload(request: Request):
         logger.warning(f"[{proc.user_id}] skills.reload failed after upload: {e}")
 
     return {"status": "installed", "name": skill_name}
+
+
+# ── Generic HTTP proxy catch-all (MUST be last /api/* route) ──
+
+@app.api_route("/api/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+async def proxy_api(request: Request, path: str):
+    """
+    Proxy /api/* to user's Hermes process.
+    Auto-prefixes /api/ back when forwarding.
+    """
+    proc = await _proc_for_request(request)
+    body = await request.body()
+    ct = request.headers.get("content-type", "")
+    return await _hermes_http(proc, request.method, f"/api/{path}", body, ct)
 
 
 if __name__ == "__main__":
