@@ -992,11 +992,27 @@ async def proxy_skill_upload(request: Request):
             raise HTTPException(status_code=400, detail="Invalid zip file")
 
         # Find skill directory: either root of zip or single top-level dir
-        entries = [p for p in Path(tmp).iterdir() if p.name != "upload.zip"]
+        # Filter out the zip file itself, hidden dirs (__MACOSX), and macOS metadata
+        _skip = {"upload.zip", "__MACOSX", ".DS_Store"}
+        entries = [p for p in Path(tmp).iterdir() if p.name not in _skip and not p.name.startswith(".")]
         if len(entries) == 1 and entries[0].is_dir():
             src_dir = entries[0]
+        elif len(entries) == 0:
+            raise HTTPException(status_code=400, detail="Empty zip file")
         else:
-            src_dir = Path(tmp)
+            # Check if SKILL.md is at root level
+            if (Path(tmp) / "SKILL.md").exists():
+                src_dir = Path(tmp)
+            else:
+                # Try finding a subdirectory with SKILL.md
+                found = None
+                for e in entries:
+                    if e.is_dir() and (e / "SKILL.md").exists():
+                        found = e
+                        break
+                if not found:
+                    raise HTTPException(status_code=400, detail="Invalid skill: missing SKILL.md")
+                src_dir = found
 
         # Validate: must have SKILL.md
         if not (src_dir / "SKILL.md").exists():
