@@ -819,13 +819,13 @@ async def proxy_acquire(request: Request):
         if not user_id:
             raise HTTPException(status_code=401, detail="Not authenticated")
     try:
-        proc = await broker.acquire(user_id)
+        info = await broker.acquire(user_id)
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
     return {
-        "user_id": proc.user_id,
-        "status": proc.status,
-        "created_at": proc.created_at,
+        "user_id": info["user_id"],
+        "status": info["status"],
+        "created_at": info["created_at"],
     }
 
 
