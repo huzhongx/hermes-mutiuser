@@ -2000,7 +2000,7 @@ async function loadSettingsSkills(highlight) {
   const body = $('settingsBody');
   body.innerHTML = '<div class="settings-loading">Loading\u2026</div>';
   try {
-    const skills = await hermesHTTP('GET', '/api/skills');
+    const skills = await hermesHTTP('GET', '/api/skills/list');
     const list = Array.isArray(skills) ? skills : (skills.skills || []);
     // Sort: highlighted skill first, then enabled, then disabled
     const sorted = [...list].sort((a, b) => {
@@ -2011,6 +2011,8 @@ async function loadSettingsSkills(highlight) {
     });
     const enabledCount = list.filter(s => s.enabled).length;
     const disabledCount = list.length - enabledCount;
+    const sysSkills = list.filter(s => !s.user_installed);
+    const userSkills = list.filter(s => s.user_installed);
 
     let html = '<div class="s-card"><div class="s-card-title">Search & Install</div>';
     html += '<div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">Search from Hermes ACP Registry (hermes.acp.community) for community skills, agents, and integrations.</div>';
@@ -2026,22 +2028,39 @@ async function loadSettingsSkills(highlight) {
     html += '<span id="skillUploadMsg" style="font-size:12px;margin-left:8px"></span>';
     html += '</div></div>';
 
-    html += '<div class="s-card"><div class="s-card-title">Installed Skills (' + list.length + ')</div>';
-    if (list.length === 0) {
-      html += '<div class="s-empty">No skills installed</div>';
+    // System skills section
+    html += '<div class="s-card"><div class="s-card-title">System Skills (' + sysSkills.length + ')</div>';
+    html += '<div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">Pre-installed, shared across all users</div>';
+    if (sysSkills.length === 0) {
+      html += '<div class="s-empty">No system skills</div>';
     } else {
-      html += '<div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">' + enabledCount + ' enabled, ' + disabledCount + ' disabled</div>';
-      html += '<div class="skill-search" style="margin-bottom:10px"><input id="installedSkillFilter" placeholder="Filter installed skills\u2026" oninput="filterInstalledSkills()"></div>';
-      html += '<div id="installedSkillList">';
-      for (const s of sorted) {
-        const isNew = s.name === highlight;
-        let itemStyle = isNew ? 'border-color:var(--success);background:#f0fdf4' : (!s.enabled ? 'opacity:0.6' : '');
-        html += `<div class="skill-item" data-skill-name="${esc(s.name.toLowerCase())}" data-skill-desc="${esc((s.description||'').toLowerCase())}" ${itemStyle ? 'style="' + itemStyle + '"' : ''}>
-          <div class="skill-info"><div class="skill-name">${esc(s.name)}${isNew ? ' <span style="color:var(--success);font-size:11px">\u2713 Installed</span>' : ''}</div><div class="skill-desc">${esc(s.description || '')}</div></div>
-          <label class="toggle"><input type="checkbox" ${s.enabled ? 'checked' : ''} onchange="toggleSkill('${esc(s.name)}',this.checked)"><span class="toggle-slider"></span></label>
+      for (const s of sysSkills) {
+        let itemStyle = !s.enabled ? 'opacity:0.6' : '';
+        html += `<div class="skill-item" data-skill-name="${esc(s.name.toLowerCase())}" data-skill-desc="${esc((s.description||'').toLowerCase())}" ${itemStyle ? 'style="'+itemStyle+'"' : ''}>
+          <div class="skill-info"><div class="skill-name">${esc(s.name)} <span style="font-size:10px;color:var(--text-dim);background:var(--bg);padding:1px 6px;border-radius:4px">system</span></div><div class="skill-desc">${esc(s.description || '')}</div></div>
+          <label class="toggle"><input type="checkbox" ${s.enabled?'checked':''} onchange="toggleSkill('${esc(s.name)}',this.checked)"><span class="toggle-slider"></span></label>
         </div>`;
       }
-      html += '</div>';
+    }
+    html += '</div>';
+
+    // User-installed skills section
+    html += '<div class="s-card"><div class="s-card-title">My Skills (' + userSkills.length + ')</div>';
+    html += '<div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">Installed by you, can be modified or removed</div>';
+    if (userSkills.length === 0) {
+      html += '<div class="s-empty">No user-installed skills. Upload a .zip or search above to install.</div>';
+    } else {
+      for (const s of userSkills) {
+        const isNew = s.name === highlight;
+        let itemStyle = isNew ? 'border-color:var(--success);background:#f0fdf4' : (!s.enabled ? 'opacity:0.6' : '');
+        html += `<div class="skill-item" data-skill-name="${esc(s.name.toLowerCase())}" data-skill-desc="${esc((s.description||'').toLowerCase())}" ${itemStyle ? 'style="'+itemStyle+'"' : ''}>
+          <div class="skill-info"><div class="skill-name">${esc(s.name)}${isNew ? ' <span style="color:var(--success);font-size:11px">\u2713 Installed</span>' : ''}</div><div class="skill-desc">${esc(s.description || '')}</div></div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <label class="toggle"><input type="checkbox" ${s.enabled?'checked':''} onchange="toggleSkill('${esc(s.name)}',this.checked)"><span class="toggle-slider"></span></label>
+            <button class="cron-btn" style="border-color:var(--danger);color:var(--danger);font-size:11px;padding:2px 8px" onclick="deleteSkill('${esc(s.name)}')" title="Delete skill">\u2715</button>
+          </div>
+        </div>`;
+      }
     }
     html += '</div>';
 
@@ -2194,6 +2213,17 @@ async function toggleSkill(name, enabled) {
     await hermesHTTP('PUT', '/api/skills/toggle', { name, enabled });
   } catch (e) {
     addSystemMsg('Toggle failed: ' + e.message);
+  }
+}
+
+async function deleteSkill(name) {
+  if (!confirm('Delete skill "' + name + '"?')) return;
+  try {
+    await hermesHTTP('DELETE', '/api/skills/' + encodeURIComponent(name));
+    addSystemMsg('Skill deleted: ' + name);
+    loadSettingsSkills();
+  } catch (e) {
+    addSystemMsg('Delete failed: ' + e.message);
   }
 }
 

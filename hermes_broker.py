@@ -1044,6 +1044,60 @@ async def proxy_skill_upload(request: Request):
     return {"status": "installed", "name": skill_name}
 
 
+@app.get("/api/skills/list")
+async def proxy_skills_list(request: Request):
+    """List skills with system/user classification."""
+    proc = await _proc_for_request(request)
+    user_home = Path(proc.work_dir).parent / "hermes_home"
+    user_skills_dir = user_home / "skills"
+
+    # Get skills from Hermes process
+    session = await _get_proxy_http()
+    url = f"http://127.0.0.1:{proc.port}/api/skills"
+    headers = {"Authorization": f"Bearer {proc.ws_token}"}
+    async with session.get(url, headers=headers) as resp:
+        skills_data = await resp.json()
+    skills_list = skills_data if isinstance(skills_data, list) else skills_data.get("skills", [])
+
+    # Mark each skill as system or user
+    for s in skills_list:
+        skill_path = user_skills_dir / s["name"]
+        s["user_installed"] = skill_path.is_dir() and not skill_path.is_symlink()
+
+    return skills_list
+
+
+@app.delete("/api/skills/{skill_name}")
+async def proxy_skill_delete(skill_name: str, request: Request):
+    """Delete a user-installed skill."""
+    proc = await _proc_for_request(request)
+    user_home = Path(proc.work_dir).parent / "hermes_home"
+    skill_path = user_home / "skills" / skill_name
+
+    if not skill_path.exists():
+        raise HTTPException(status_code=404, detail="Skill not found")
+    if skill_path.is_symlink():
+        raise HTTPException(status_code=400, detail="Cannot delete system skill")
+
+    shutil.rmtree(str(skill_path))
+    logger.info(f"[{proc.user_id}] Skill deleted: {skill_name}")
+
+    # Trigger skills.reload via WS
+    try:
+        import json
+        ws_url = f"ws://127.0.0.1:{proc.port}/api/ws?token={proc.ws_token}"
+        session = await _get_proxy_http()
+        async with session.ws_connect(ws_url) as hermes_ws:
+            await hermes_ws.send_str(json.dumps({"jsonrpc": "2.0", "id": "_skill_del", "method": "skills.reload", "params": {}}))
+            async for msg in hermes_ws:
+                if msg.type == aiohttp.WSMsgType.TEXT:
+                    break
+    except Exception as e:
+        logger.warning(f"[{proc.user_id}] skills.reload after delete failed: {e}")
+
+    return {"status": "deleted", "name": skill_name}
+
+
 # ── Generic HTTP proxy catch-all (MUST be last /api/* route) ──
 
 @app.api_route("/api/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
