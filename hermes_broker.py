@@ -37,7 +37,7 @@ import aiohttp
 import jwt as pyjwt
 import requests as req_lib
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 logging.basicConfig(
@@ -180,14 +180,11 @@ class ProcessBroker:
         else:
             await self._kill(proc)
         self._free_port(proc.port)
-        # Only clean up the session work_dir (logs etc.), preserve hermes_home (state.db)
+        # Only clean up logs, preserve user-generated files in work_dir
         if proc.work_dir and os.path.exists(proc.work_dir):
-            # Move hermes_home aside if it's inside work_dir
-            hermes_home = Path(proc.work_dir) / "hermes_home"
-            if hermes_home.exists() and str(hermes_home).startswith(str(self.work_root)):
-                # hermes_home is now at stable path, not inside work_dir — safe to remove work_dir
-                pass
-            shutil.rmtree(proc.work_dir, ignore_errors=True)
+            logs_dir = Path(proc.work_dir) / "logs"
+            if logs_dir.is_dir():
+                shutil.rmtree(logs_dir, ignore_errors=True)
 
     def get(self, user_id: str) -> Optional[HermesProcess]:
         return self._procs.get(user_id)
@@ -288,10 +285,18 @@ class ProcessBroker:
         async with self._lock:
             port = self._alloc_port()
 
-        if session_id is None:
-            session_id = str(uuid.uuid4())
+        user_base = self.work_root / (user_id if user_id != "__warm__" else "__warm__")
 
-        work_dir = self.work_root / (user_id if user_id != "__warm__" else "__warm__") / session_id
+        if session_id is None:
+            # Reuse existing orphan work_dir if any (survives broker restart)
+            existing_dirs = sorted(
+                (d for d in user_base.iterdir() if d.is_dir() and d.name not in ("hermes_home",)),
+                key=lambda d: d.stat().st_mtime,
+                reverse=True,
+            )
+            session_id = existing_dirs[0].name if existing_dirs else str(uuid.uuid4())
+
+        work_dir = user_base / session_id
         work_dir.mkdir(parents=True, exist_ok=True)
         logs_dir = work_dir / "logs"
         logs_dir.mkdir(exist_ok=True)
@@ -352,6 +357,7 @@ class ProcessBroker:
 
             proc_env = os.environ.copy()
             proc_env["HERMES_HOME"] = str(user_home)
+            proc_env["HERMES_WRITE_SAFE_ROOT"] = str(work_dir)
 
             logger.info(f"[{user_id}] 启动 dashboard port={port}")
             proc.process = await asyncio.create_subprocess_exec(
@@ -886,6 +892,9 @@ async def proxy_acquire(request: Request):
         info = await broker.acquire(user_id)
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
+    proc = broker.get(user_id)
+    if proc:
+        proc.touch()
     return {
         "user_id": info["user_id"],
         "status": info["status"],
@@ -944,6 +953,7 @@ async def ws_proxy(websocket: WebSocket):
                 try:
                     while True:
                         data = await websocket.receive_text()
+                        proc.touch()
                         await hermes_ws.send_str(data)
                 except (WebSocketDisconnect, Exception):
                     pass
@@ -957,6 +967,7 @@ async def ws_proxy(websocket: WebSocket):
                 try:
                     async for msg in hermes_ws:
                         if msg.type == aiohttp.WSMsgType.TEXT:
+                            proc.touch()
                             await websocket.send_text(msg.data)
                         elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
                             break
@@ -1022,31 +1033,110 @@ async def proxy_upload(request: Request):
 
 
 @app.get("/api/files")
-async def list_files(request: Request):
-    """List uploaded files (JWT auth)."""
+async def list_files(request: Request, scope: str = "all"):
+    """List files (JWT auth).
+    scope=current: only current session's work_dir.
+    scope=all: all session work_dirs under user_root."""
     proc = await _proc_for_request(request)
-    uploads = Path(proc.work_dir) / "uploads"
     result = []
-    if uploads.is_dir():
-        for f in sorted(uploads.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
-            if f.is_file() and not f.name.startswith('.'):
-                stat = f.stat()
+    _skip = {"hermes_home", "logs", "__pycache__"}
+
+    def _scan(directory: Path, prefix: str = ""):
+        try:
+            entries = sorted(directory.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True)
+        except PermissionError:
+            return
+        for entry in entries:
+            if entry.name.startswith('.') or entry.name in _skip:
+                continue
+            if entry.is_file():
+                stat = entry.stat()
                 result.append({
-                    "name": f.name,
+                    "path": prefix + entry.name if prefix else entry.name,
+                    "name": entry.name,
                     "size": stat.st_size,
                     "mtime": stat.st_mtime,
                 })
+            elif entry.is_dir():
+                _scan(entry, prefix + entry.name + "/")
+
+    if scope == "current":
+        work_dir = Path(proc.work_dir)
+        if work_dir.is_dir():
+            _scan(work_dir)
+    else:
+        user_root = Path(broker.work_root) / proc.user_id
+        if user_root.is_dir():
+            for entry in sorted(user_root.iterdir()):
+                if entry.name.startswith('.') or entry.name in _skip:
+                    continue
+                if entry.is_dir():
+                    _scan(entry, entry.name + "/")
+
+    logger.info(f"[{proc.user_id}] list_files: found {len(result)} files")
     return result
-
-
-@app.get("/api/files/{filename}")
-async def proxy_download(filename: str, request: Request):
-    """Serve an uploaded file for download (JWT auth)."""
+async def proxy_download(file_path: str, request: Request):
+    """Serve a file from current session's work_dir for download (JWT auth)."""
     proc = await _proc_for_request(request)
-    fpath = Path(proc.work_dir) / "uploads" / filename
+    user_root = Path(broker.work_root) / proc.user_id
+    fpath = user_root / file_path
+    # Path traversal protection
+    try:
+        fpath = fpath.resolve()
+        if not str(fpath).startswith(str(user_root.resolve())):
+            raise HTTPException(status_code=403, detail="Access denied")
+    except (ValueError, OSError):
+        raise HTTPException(status_code=400, detail="Invalid path")
+    # Block sensitive directories
+    _blocked = {"hermes_home", "logs"}
+    for part in fpath.relative_to(user_root.resolve()).parts:
+        if part.startswith('.') or part in _blocked:
+            raise HTTPException(status_code=403, detail="Access denied")
     if not fpath.is_file():
         raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(str(fpath), filename=filename)
+    return FileResponse(str(fpath), filename=fpath.name)
+
+
+@app.get("/api/files/download/{file_path:path}")
+async def download_files(file_path: str, request: Request):
+    """Download a file or folder as zip archive (JWT auth)."""
+    import zipfile, io
+
+    proc = await _proc_for_request(request)
+    user_root = Path(broker.work_root) / proc.user_id
+    fpath = user_root / file_path
+    # Path traversal protection
+    try:
+        fpath = fpath.resolve()
+        if not str(fpath).startswith(str(user_root.resolve())):
+            raise HTTPException(status_code=403, detail="Access denied")
+    except (ValueError, OSError):
+        raise HTTPException(status_code=400, detail="Invalid path")
+    _blocked = {"hermes_home", "logs"}
+    for part in fpath.relative_to(user_root.resolve()).parts:
+        if part.startswith('.') or part in _blocked:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+    if fpath.is_file():
+        return FileResponse(str(fpath), filename=fpath.name)
+
+    if fpath.is_dir():
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for root, dirs, files in os.walk(fpath):
+                for fname in sorted(files):
+                    f = Path(root) / fname
+                    if f.is_file() and not fname.startswith('.'):
+                        arcname = Path(f).relative_to(fpath)
+                        zf.write(str(f), str(arcname))
+        buf.seek(0)
+        return StreamingResponse(
+            buf,
+            media_type="application/zip",
+            headers={"Content-Disposition": f"attachment; filename={fpath.name}.zip"},
+        )
+
+    raise HTTPException(status_code=404, detail="Not found")
 
 
 @app.post("/api/skills/upload")
@@ -1171,7 +1261,6 @@ async def proxy_skills_list(request: Request):
                 logger.info(f"[{proc.user_id}] Synced system skill: {skill_entry.name}")
                 needs_reload = True
             elif user_skill.is_dir() and not user_skill.is_symlink():
-                # Old copy from before symlink migration — replace with symlink
                 shutil.rmtree(str(user_skill))
                 os.symlink(str(skill_entry), str(user_skill))
                 logger.info(f"[{proc.user_id}] Migrated system skill to symlink: {skill_entry.name}")
