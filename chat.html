@@ -298,6 +298,83 @@ body {
   font-size: 11px;
   white-space: nowrap;
 }
+.file-dir-name {
+  padding: 8px 16px 2px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: -1px;
+}
+.file-dir {
+  user-select: none;
+}
+.file-dir-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+  border-bottom: 1px solid var(--border);
+}
+.file-dir-toggle:hover {
+  background: var(--hover);
+}
+.file-dir-arrow {
+  font-size: 8px;
+  transition: transform 0.15s;
+  display: inline-block;
+  width: 10px;
+  text-align: center;
+  flex-shrink: 0;
+}
+.file-dir-arrow.open {
+  transform: rotate(0);
+}
+.file-dir:not(.collapsed) .file-dir-arrow:not(.open),
+.file-dir.collapsed .file-dir-arrow.open {
+  transform: rotate(-90deg);
+}
+.file-dir-icon {
+  font-size: 13px;
+  flex-shrink: 0;
+}
+.file-dir-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-dir-count {
+  font-size: 10px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.file-dir-dl {
+  font-size: 13px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+  flex-shrink: 0;
+  margin-left: 4px;
+}
+.file-dir-toggle:hover .file-dir-dl {
+  opacity: 0.7;
+}
+.file-dir-dl:hover {
+  opacity: 1 !important;
+}
+.file-dir.collapsed .file-dir-children {
+  display: none;
+}
+.file-dir-children .file-item {
+  border-bottom-color: transparent;
+  font-size: 12px;
+  padding: 5px 8px;
+}
 
 /* ── Settings overlay (covers chat area) ── */
 .settings-col {
@@ -929,7 +1006,9 @@ body {
   <div class="files-panel" id="filesPanel">
     <div class="files-panel-header">
       <span>Files</span>
-      <button onclick="toggleFilesPanel()" style="background:none;border:none;color:var(--fg);cursor:pointer;font-size:18px">&times;</button>
+      <div style="display:flex;gap:4px;align-items:center">
+        <button onclick="toggleFilesPanel()" style="background:none;border:none;color:var(--fg);cursor:pointer;font-size:18px">&times;</button>
+      </div>
     </div>
     <div class="files-panel-body" id="filesPanelBody">
       <div style="padding:16px;color:var(--muted);font-size:13px">No files yet</div>
@@ -1111,12 +1190,12 @@ async function connect(uid, silent) {
             const result = await rpc('session.resume', { session_id: conv.sessionKey });
             conv.hermesSid = result.session_id;
             resumed = true;
-            doSwitchConv(id);
+            await doSwitchConv(id);
             break;
           } catch (e) { conv.hermesSid = null; }
         }
       }
-      if (!resumed) { doSwitchConv(ids[0]); await newConversation(); }
+      if (!resumed) { await doSwitchConv(ids[0]); await newConversation(); }
       else {
         for (const id of ids) { if (id !== activeConvId) conversations[id].hermesSid = null; }
         save();
@@ -1345,8 +1424,14 @@ function handleWS(data, initResolve) {
           }, 1500);
         }
       }
-      // Auto-refresh files panel on write-related tool completion
-      if (filesPanelOpen && /^(write|edit|save)/i.test(toolName)) refreshFilesList();
+      // Track files per conversation on write-related tool completion
+      if (/^(write|edit|save)/i.test(toolName) && payload.output) {
+        // Extract file path from tool output
+        const match = payload.output.match(/(?:Wrote|Edited|Saved|Created|wrote to|saved to)\s+(?:`?)([^\s`'"]+)/);
+        if (match) {
+          if (filesPanelOpen) refreshFilesList();
+        }
+      }
       return;
     }
     if (['tool.complete','session.info','thinking.delta','reasoning.delta','reasoning.available','status.update'].includes(t)) return;
@@ -1540,6 +1625,7 @@ async function loadServerSessions() {
       if (local) {
         if (s.title && s.title !== 'New chat' && s.title !== 'Untitled') local.title = s.title;
         local._msgCount = s.message_count || 0;
+        if (local.messages.length < (s.message_count || 0)) local._loaded = false;
       } else {
         const convId = 'conv_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
         conversations[convId] = {
@@ -1565,12 +1651,16 @@ async function loadServerSessions() {
 
 async function loadSessionMessages(convId) {
   const conv = conversations[convId];
-  if (!conv?.sessionKey || conv._loaded) return;
+  if (!conv?.sessionKey) return;
+  if (conv._loaded && conv.messages.length >= (conv._msgCount || 0)) return;
   try {
     const data = await hermesHTTP('GET', '/api/sessions/' + conv.sessionKey + '/messages');
-    conv.messages = (data.messages || [])
+    const remote = (data.messages || [])
       .filter(m => m.role === 'user' || m.role === 'assistant')
       .map(m => ({ role: m.role, text: typeof m.content === 'string' ? m.content : JSON.stringify(m.content), ts: Date.now() }));
+    if (remote.length > conv.messages.length) {
+      conv.messages = remote;
+    }
     conv._loaded = true;
     if ((conv.title === 'Untitled' || conv.title === 'New chat') && conv.messages.length > 0) {
       const first = conv.messages.find(m => m.role === 'user');
@@ -1674,7 +1764,7 @@ async function newConversation() {
       id: convId, hermesSid: result.session_id, sessionKey: null,
       title: 'New chat', messages: [], createdAt: Date.now(), updatedAt: Date.now(),
     };
-    doSwitchConv(convId);
+    await doSwitchConv(convId);
     save(); renderSessionList(); enableInput(); $('input').focus();
     fetchSessionKey(convId);
   } catch (e) { addSystemMsg('Failed to create: ' + e.message); }
@@ -1690,9 +1780,12 @@ async function fetchSessionKey(convId) {
   } catch (e) {}
 }
 
-function doSwitchConv(convId) {
+async function doSwitchConv(convId) {
   activeConvId = convId;
   _toolStepSeq = 0;
+  if (conversations[convId]?.sessionKey && !conversations[convId]._loaded) {
+    await loadSessionMessages(convId);
+  }
   renderSessionList(); renderMessages(); enableInput();
 }
 
@@ -1711,7 +1804,7 @@ async function switchConversation(convId) {
   activeConvId = convId;
   renderSessionList();
 
-  if (conv.messages.length === 0 && conv.sessionKey && !conv._loaded) await loadSessionMessages(convId);
+  if (conv.sessionKey && !conv._loaded) await loadSessionMessages(convId);
   renderMessages();
 
   if (isConvStreaming(convId) && !document.getElementById('streamingMsg')) {
@@ -1723,6 +1816,7 @@ async function switchConversation(convId) {
 
   conv.hermesSid && !isConvStreaming(convId) ? enableInput() : disableInput();
   fetchUsage(convId);
+  if (filesPanelOpen) refreshFilesList();
 }
 
 async function deleteConversation(convId, event) {
@@ -1883,7 +1977,7 @@ async function uploadFiles(fileList) {
       showStatusBar(file.name + ' ready (' + _fmtSize(file.size) + ')');
       setTimeout(() => hideStatusBar(), 2000);
       $('input')?.focus();
-      if (filesPanelOpen) refreshFilesList();
+      if (filesPanelOpen) renderConvFiles();
     } catch (e) {
       addSystemMsg('Upload failed (' + file.name + '): ' + e.message);
     }
@@ -2269,35 +2363,126 @@ function closeSettings() {
 
 // ── Files panel ──
 let filesPanelOpen = false;
+let _allFiles = null;
+
+function downloadFile(path, name) {
+  const a = document.createElement('a');
+  a.href = '/api/files/' + path;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+function downloadFolder(dirPath) {
+  const a = document.createElement('a');
+  a.href = '/api/files/download/' + dirPath.split('/').map(encodeURIComponent).join('/');
+  a.download = dirPath.split('/').pop() + '.zip';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
 
 function toggleFilesPanel() {
   const panel = $('filesPanel');
   filesPanelOpen = !filesPanelOpen;
   panel.classList.toggle('open', filesPanelOpen);
-  if (filesPanelOpen) refreshFilesList();
+  if (filesPanelOpen) renderConvFiles();
 }
 
 function refreshFilesList() {
-  fetch('/api/files', { headers: { 'Authorization': 'Bearer ' + wsToken } })
+  fetch('/api/files', { credentials: 'include' })
     .then(r => r.json())
     .then(files => {
-      const body = $('filesPanelBody');
-      if (!files.length) {
-        body.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:13px">No files yet</div>';
-        return;
-      }
-      body.innerHTML = files.map(f => {
-        const size = f.size < 1024 ? f.size + ' B' :
-                     f.size < 1048576 ? (f.size/1024).toFixed(1) + ' KB' :
-                     (f.size/1048576).toFixed(1) + ' MB';
-        const time = new Date(f.mtime * 1000).toLocaleTimeString();
-        return `<div class="file-item" onclick="window.open('/api/files/${encodeURIComponent(f.name)}')">
-          <span class="file-item-name">${esc(f.name)}</span>
-          <span class="file-item-meta">${size} &middot; ${time}</span>
-        </div>`;
-      }).join('');
+      _allFiles = files;
+      renderConvFiles();
     })
     .catch(() => {});
+}
+
+function renderConvFiles() {
+  const body = $('filesPanelBody');
+  if (_allFiles && _allFiles.length > 0) {
+    body.innerHTML = buildTree(_allFiles);
+  } else {
+    fetch('/api/files', { credentials: 'include' })
+      .then(r => r.json())
+      .then(files => {
+        _allFiles = files;
+        if (!files.length) {
+          body.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:13px">No files yet</div>';
+          return;
+        }
+        body.innerHTML = buildTree(files);
+      })
+      .catch(() => {
+        body.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:13px">No files yet</div>';
+      });
+  }
+}
+
+function buildTree(files) {
+  // Build a nested tree from flat file list
+  const root = {};
+  files.forEach(f => {
+    const parts = f.path.split('/');
+    let node = root;
+    parts.forEach((part, i) => {
+      if (i === parts.length - 1) {
+        // Leaf = file
+        node['__files'] = node['__files'] || [];
+        node['__files'].push({ ...f, leafName: part });
+      } else {
+        // Directory
+        if (!node[part]) node[part] = {};
+        node = node[part];
+      }
+    });
+  });
+  return renderNode(root, 0, '');
+}
+
+function renderNode(node, indent, prefix) {
+  const dirs = Object.keys(node).filter(k => k !== '__files').sort();
+  const files = node['__files'] || [];
+
+  let html = '';
+
+  // Render subdirectories first
+  dirs.forEach(dir => {
+    const child = node[dir];
+    const childFiles = child['__files'] || [];
+    const childDirs = Object.keys(child).filter(k => k !== '__files');
+    const count = childFiles.length + childDirs.length;
+    const dirPath = prefix ? prefix + '/' + dir : dir;
+    const pad = indent ? 'padding-left:' + indent + 'px' : '';
+    html += `<div class="file-dir" style="${pad ? pad + ';' : ''}">
+      <span class="file-dir-toggle" onclick="this.parentElement.classList.toggle('collapsed');this.querySelector('.file-dir-arrow').classList.toggle('open')">
+        <span class="file-dir-arrow open">&#9660;</span>
+        <span class="file-dir-icon">&#128193;</span>
+        <span class="file-dir-label">${esc(dir)}</span>
+        <span class="file-dir-count">${count}</span>
+        <span class="file-dir-dl" onclick="event.stopPropagation();downloadFolder('${dirPath.split('/').map(encodeURIComponent).join('/')}')" title="Download as zip">&#128230;</span>
+      </span>
+      <div class="file-dir-children">${renderNode(child, (indent || 0) + 16, dirPath)}</div>
+    </div>`;
+  });
+
+  // Render files
+  files.forEach(f => {
+    const size = f.size ? (f.size < 1024 ? f.size + ' B' :
+                 f.size < 1048576 ? (f.size/1024).toFixed(1) + ' KB' :
+                 (f.size/1048576).toFixed(1) + ' MB') : '';
+    const time = f.mtime ? new Date(f.mtime * 1000).toLocaleTimeString() : '';
+    const encPath = f.path.split('/').map(encodeURIComponent).join('/');
+    const pad = indent ? 'padding-left:' + (indent + 8) + 'px' : 'padding-left:16px';
+    html += `<div class="file-item" style="${pad}" onclick="downloadFile('${encPath}','${esc(f.leafName || f.name)}')">
+      <span class="file-item-name" title="${esc(f.path)}">${esc(f.leafName || f.name)}</span>
+      <span class="file-item-meta">${size}${size && time ? ' &middot; ' : ''}${time}</span>
+    </div>`;
+  });
+
+  return html;
 }
 
 function switchNav(section) {
@@ -3118,17 +3303,21 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') { if (filesP
   }
 })();
 
-// ── Intercept F5/Ctrl+R: refresh session list only, skip full reload ──
+// ── Intercept F5/Ctrl+R: refresh current chat messages only, skip full reload ──
 (function() {
-  async function refreshSessionList() {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return; // not connected, allow normal reload
-    try { await loadServerSessions(); } catch(e) {}
+  async function softRefresh() {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (activeConvId && conversations[activeConvId]) {
+      conversations[activeConvId]._loaded = false;
+      await loadSessionMessages(activeConvId);
+      renderMessages();
+    }
   }
 
   document.addEventListener('keydown', function(e) {
     if (e.key === 'F5' || (e.ctrlKey && e.key === 'r') || (e.metaKey && e.key === 'r')) {
       e.preventDefault();
-      refreshSessionList();
+      softRefresh();
     }
   });
 })();
