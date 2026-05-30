@@ -2325,9 +2325,11 @@ function esc(s) { const d = document.createElement('div'); d.textContent = s; re
 
 function _renderAttachments(files) {
   return '<div class="msg-attachments">' + files.map(f => {
-    const url = '/api/files/' + encodeURIComponent(f.name);
+    const fileUrl = f.path
+      ? '/api/files/download/' + f.path.split('/').map(encodeURIComponent).join('/')
+      : '/api/files/download/' + encodeURIComponent(f.name);
     const target = f.isImage ? ' target="_blank"' : '';
-    return `<a class="att-card" href="${url}" download="${esc(f.name)}"${target}><span class="att-icon">${f.isImage ? '&#128247;' : '&#128196;'}</span><div class="att-info"><span class="att-name">${esc(f.name)}</span><span class="att-size">${_fmtSize(f.size)}</span></div></a>`;
+    return `<a class="att-card" href="${fileUrl}" download="${esc(f.name)}"${target}><span class="att-icon">${f.isImage ? '&#128247;' : '&#128196;'}</span><div class="att-info"><span class="att-name">${esc(f.name)}</span><span class="att-size">${_fmtSize(f.size)}</span></div></a>`;
   }).join('') + '</div>';
 }
 
@@ -2387,7 +2389,7 @@ let _allFiles = null;
 
 function downloadFile(path, name) {
   const a = document.createElement('a');
-  a.href = '/api/files/' + path;
+  a.href = '/api/files/download/' + path;
   a.download = name;
   document.body.appendChild(a);
   a.click();
