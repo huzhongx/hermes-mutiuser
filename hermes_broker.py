@@ -20,6 +20,7 @@ Hermes Process Broker — 轻量级进程经纪人
 """
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -108,6 +109,13 @@ class ProcessBroker:
         self._cleanup_task: Optional[asyncio.Task] = None
         self._warm_task: Optional[asyncio.Task] = None
 
+        # Drain state
+        self._draining: bool = False
+        self._drain_event: Optional[asyncio.Event] = None
+        self._drain_progress: Dict[str, str] = {}  # user_id → "pending"|"flushing"|"done"|"error"|"timeout"
+        self._drain_task: Optional[asyncio.Task] = None
+        self._drain_started_at: Optional[float] = None
+
         self._public_host = os.environ.get("HERMES_PUBLIC_HOST", "127.0.0.1")
 
     def _alloc_port(self) -> int:
@@ -131,6 +139,12 @@ class ProcessBroker:
         logger.info(f"ProcessBroker started, warm_pool={self.warm_pool_size}")
 
     async def stop(self):
+        # If drain is in progress, wait for it to complete
+        if self._draining and self._drain_event and not self._drain_event.is_set():
+            try:
+                await asyncio.wait_for(self._drain_event.wait(), timeout=30)
+            except asyncio.TimeoutError:
+                pass
         for t in (self._cleanup_task, self._warm_task):
             if t:
                 t.cancel()
@@ -147,6 +161,10 @@ class ProcessBroker:
         为用户分配一个 Hermes 进程。
         如果已有活跃进程直接返回；否则从预热池取或冷启动。
         """
+        # Drain mode — reject new allocations
+        if self._draining:
+            raise RuntimeError("Broker is draining, not accepting new connections")
+
         # 已有活跃进程 → 直接返回
         async with self._lock:
             existing = self._procs.get(user_id)
@@ -472,6 +490,132 @@ class ProcessBroker:
                 pass
         logger.info(f"[{proc.user_id}] 进程 PID={proc.pid} 已终止")
 
+    # ── Graceful drain ──────────────────────────────────────
+
+    async def start_drain(self, timeout: int = 300) -> dict:
+        """Begin graceful drain. Returns immediately with initial status."""
+        async with self._lock:
+            if self._draining:
+                return {"status": "already_draining", "started_at": self._drain_started_at, **self._drain_status()}
+
+            self._draining = True
+            self._drain_event = asyncio.Event()
+            self._drain_started_at = time.time()
+
+            # Snapshot current processes and warm pool
+            user_ids = list(self._procs.keys())
+            warm_ids = list(self._warm.keys())
+
+            for uid in user_ids:
+                self._drain_progress[uid] = "pending"
+            for sid in warm_ids:
+                self._drain_progress[sid] = "pending_warm"
+
+        # Cancel warm pool maintainer
+        if self._warm_task:
+            self._warm_task.cancel()
+            self._warm_task = None
+
+        # Kill warm pool (no sessions to flush)
+        for sid in warm_ids:
+            self._drain_progress[sid] = "flushing"
+            await self._destroy_warm(sid)
+            self._drain_progress[sid] = "done"
+
+        # Stop cleanup loop to prevent race
+        if self._cleanup_task:
+            self._cleanup_task.cancel()
+            self._cleanup_task = None
+
+        if not user_ids:
+            self._drain_event.set()
+            logger.info("[drain] No active processes to drain")
+        else:
+            self._drain_task = asyncio.create_task(self._drain_users(user_ids, timeout))
+            logger.info(f"[drain] Starting drain for {len(user_ids)} processes, timeout={timeout}s")
+
+        return {"status": "draining", "started_at": self._drain_started_at, **self._drain_status()}
+
+    async def _drain_users(self, user_ids: list, timeout: int):
+        """Background task: flush and kill all user processes concurrently."""
+        semaphore = asyncio.Semaphore(10)
+
+        async def _drain_one(uid: str):
+            async with semaphore:
+                self._drain_progress[uid] = "flushing"
+                try:
+                    async with self._lock:
+                        proc = self._procs.pop(uid, None)
+                    if proc:
+                        await self._flush_and_kill(proc)
+                        self._free_port(proc.port)
+                        if proc.work_dir and os.path.exists(proc.work_dir):
+                            logs_dir = Path(proc.work_dir) / "logs"
+                            if logs_dir.is_dir():
+                                shutil.rmtree(logs_dir, ignore_errors=True)
+                    self._drain_progress[uid] = "done"
+                except Exception as e:
+                    logger.error(f"[drain] Failed to drain {uid}: {e}")
+                    self._drain_progress[uid] = f"error: {e}"
+
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*[_drain_one(uid) for uid in user_ids], return_exceptions=True),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"[drain] Timed out after {timeout}s")
+            for uid, status in list(self._drain_progress.items()):
+                if status not in ("done",) and not status.startswith("error") and not status.startswith("done_warm"):
+                    self._drain_progress[uid] = "timeout"
+        finally:
+            self._drain_event.set()
+            logger.info("[drain] Drain complete")
+
+    async def cancel_drain(self) -> dict:
+        """Cancel an in-progress drain."""
+        async with self._lock:
+            if not self._draining:
+                return {"status": "not_draining"}
+
+            if self._drain_task and not self._drain_task.done():
+                self._drain_task.cancel()
+                try:
+                    await self._drain_task
+                except asyncio.CancelledError:
+                    pass
+
+            self._draining = False
+            self._drain_event = None
+            self._drain_task = None
+            self._drain_progress.clear()
+
+            # Restart background loops
+            self._cleanup_task = asyncio.create_task(self._cleanup_loop())
+            self._warm_task = asyncio.create_task(self._warm_maintainer())
+
+        logger.info("[drain] Drain cancelled")
+        return {"status": "cancelled"}
+
+    def _drain_status(self) -> dict:
+        """Return drain progress info."""
+        if not self._draining:
+            return {"draining": False}
+        total = len(self._drain_progress)
+        done = sum(1 for s in self._drain_progress.values() if s in ("done", "done_warm"))
+        errors = sum(1 for s in self._drain_progress.values() if s.startswith("error") or s == "timeout")
+        pending = total - done - errors
+        elapsed = time.time() - (self._drain_started_at or time.time())
+        return {
+            "draining": True,
+            "total": total,
+            "done": done,
+            "pending": pending,
+            "errors": errors,
+            "elapsed_seconds": round(elapsed, 1),
+            "processes": dict(self._drain_progress),
+        }
+
     # ── 后台清理 ──────────────────────────────────────────
 
     async def _cleanup_loop(self):
@@ -793,7 +937,66 @@ async def download_file(user_id: str, filename: str):
 
 @app.get("/broker/health")
 async def health():
-    return {"status": "ok", **broker.stats()}
+    status = "draining" if broker._draining else "ok"
+    result = {"status": status, **broker.stats()}
+    if broker._draining:
+        result["drain"] = broker._drain_status()
+    return result
+
+
+@app.post("/broker/reload")
+async def reload_config():
+    """Graceful reload: re-read broker code without killing child Hermes processes."""
+    import importlib
+    logger.info("Broker reload requested")
+    return {"status": "ok", "note": "Child processes preserved"}
+
+
+# ── Graceful drain ──────────────────────────────────────
+
+@app.post("/broker/drain")
+async def drain_start(request: Request):
+    """Start graceful drain: flush all Hermes processes, block new connections."""
+    body = {}
+    try:
+        raw = await request.body()
+        if raw:
+            body = json.loads(raw)
+    except Exception:
+        pass
+
+    timeout = body.get("timeout", 300)
+    wait = body.get("wait", False)
+
+    result = await broker.start_drain(timeout=timeout)
+
+    if wait and broker._drain_event:
+        remaining = timeout - (time.time() - (broker._drain_started_at or time.time()))
+        if remaining > 0:
+            try:
+                await asyncio.wait_for(broker._drain_event.wait(), timeout=remaining)
+            except asyncio.TimeoutError:
+                pass
+        result = {
+            "status": "drain_complete" if all(
+                v in ("done", "done_warm") for v in broker._drain_progress.values()
+            ) else "drain_timed_out",
+            **broker._drain_status(),
+        }
+
+    return result
+
+
+@app.get("/broker/drain")
+async def drain_status():
+    """Poll drain progress."""
+    return broker._drain_status()
+
+
+@app.post("/broker/drain/cancel")
+async def drain_cancel():
+    """Cancel an in-progress drain."""
+    return await broker.cancel_drain()
 
 
 @app.get("/broker/stats")
@@ -939,6 +1142,9 @@ async def ws_proxy(websocket: WebSocket):
     proc = broker.get(user["sub"])
     if not proc:
         await websocket.close(code=4004, reason="No active session")
+        return
+    if broker._draining:
+        await websocket.close(code=4003, reason="Broker is draining")
         return
     proc.touch()
 

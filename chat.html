@@ -1162,9 +1162,7 @@ async function connect(uid, silent) {
 
     const effectiveUid = brokerInfo.user_id || uid || 'user';
 
-    if (!silent) showLoading('load');
     load(effectiveUid);
-    await loadServerSessions();
 
     if (!silent) showLoading('ws');
     await connectWS();
@@ -1177,33 +1175,31 @@ async function connect(uid, silent) {
     $('footerUserName').textContent = effectiveUid;
     $('userAvatar').textContent = effectiveUid.charAt(0).toUpperCase();
 
-    // Resume or create
+    // Show localStorage data immediately
     const ids = Object.keys(conversations)
       .sort((a, b) => (conversations[b].updatedAt||0) - (conversations[a].updatedAt||0));
     if (ids.length > 0) {
-      let resumed = false;
-      for (const id of ids) {
-        const conv = conversations[id];
-        if (conv.sessionKey) {
-          try {
-            if (!silent) showLoading('resume');
-            const result = await rpc('session.resume', { session_id: conv.sessionKey });
-            conv.hermesSid = result.session_id;
-            resumed = true;
-            await doSwitchConv(id);
-            break;
-          } catch (e) { conv.hermesSid = null; }
-        }
-      }
-      if (!resumed) { await doSwitchConv(ids[0]); await newConversation(); }
-      else {
-        for (const id of ids) { if (id !== activeConvId) conversations[id].hermesSid = null; }
-        save();
-      }
+      await doSwitchConv(ids[0]);
     } else {
       await newConversation();
     }
+
     if (!silent) hideLoading();
+
+    // Background: resume active session + sync server metadata
+    (async () => {
+      // Resume the active session's WS so user can send messages
+      if (activeConvId && conversations[activeConvId]?.sessionKey && ws?.readyState === WebSocket.OPEN) {
+        try {
+          const r = await rpc('session.resume', { session_id: conversations[activeConvId].sessionKey });
+          conversations[activeConvId].hermesSid = r.session_id;
+          save();
+        } catch (e) { /* will retry on switchConversation */ }
+      }
+      // Sync session metadata in background
+      await loadServerSessions();
+      renderSessionList();
+    })();
   } catch (e) {
     if (!silent) hideLoading();
     setConn('error');
@@ -1423,13 +1419,13 @@ function handleWS(data, initResolve) {
             }
           }, 1500);
         }
-      }
-      // Track files per conversation on write-related tool completion
-      if (/^(write|edit|save)/i.test(toolName) && payload.output) {
-        // Extract file path from tool output
-        const match = payload.output.match(/(?:Wrote|Edited|Saved|Created|wrote to|saved to)\s+(?:`?)([^\s`'"]+)/);
-        if (match) {
-          if (filesPanelOpen) refreshFilesList();
+        // Track files per conversation on write-related tool completion
+        if (/^(write|edit|save)/i.test(toolName) && payload.output) {
+          // Extract file path from tool output
+          const match = payload.output.match(/(?:Wrote|Edited|Saved|Created|wrote to|saved to)\s+(?:`?)([^\s`'"]+)/);
+          if (match) {
+            if (filesPanelOpen) refreshFilesList();
+          }
         }
       }
       return;
@@ -1438,7 +1434,7 @@ function handleWS(data, initResolve) {
 
     // ── Interactive events (clarify/approval/sudo/secret) ──
     if (t === 'clarify.request') { showClarifyUI(data.params?.payload); return; }
-    if (t === 'approval.request') { showApprovalUI(data.params?.payload); return; }
+    if (t === 'approval.request') { showApprovalUI(data.params?.payload, evtSid); return; }
     if (t === 'sudo.request') { showSudoUI(data.params?.payload); return; }
     if (t === 'secret.request') { showSecretUI(data.params?.payload); return; }
   }
@@ -1519,19 +1515,36 @@ function _clarifyAnswer(requestId, answerJson) {
   rpc('clarify.respond', { answer, request_id: requestId }).catch(() => {});
 }
 
-function showApprovalUI(payload) {
+function showApprovalUI(payload, evtSid) {
   _dismissInteract();
-  const { command, description, request_id } = payload || {};
-  if (!request_id) return;
+  console.log('[approval] showApprovalUI called, evtSid=', evtSid, 'payload=', payload);
+  const { command, description, pattern_key } = payload || {};
+
+  // Store sid for the respond call — Hermes requires session_id
+  window._approvalSid = evtSid || null;
+
+  const cmd = command || '';
+  // Truncate long commands: show first 3 lines + line count
+  let displayCmd = cmd;
+  const lines = cmd.split('\n');
+  if (lines.length > 3) {
+    displayCmd = lines.slice(0, 3).join('\n') + `\n... (${lines.length} lines total)`;
+  }
 
   let html = '<div class="interact-title">Approve Command</div>';
-  if (description) html += '<div class="interact-desc">' + esc(description) + '</div>';
-  html += '<div class="interact-cmd">' + esc(command || '') + '</div>';
+  if (description) {
+    html += '<div class="interact-desc">' + esc(description) + '</div>';
+  } else if (pattern_key === 'execute_code') {
+    html += '<div class="interact-desc">Execute code script requires approval</div>';
+  } else {
+    html += '<div class="interact-desc">Terminal command requires approval</div>';
+  }
+  html += '<div class="interact-cmd">' + esc(displayCmd) + '</div>';
   html += '<div class="interact-choices">';
-  html += '<button class="interact-choice-btn primary" onclick="_approvalChoice(\'' + esc(request_id) + '\',\'once\')">Allow once</button>';
-  html += '<button class="interact-choice-btn" onclick="_approvalChoice(\'' + esc(request_id) + '\',\'session\')">Allow for this session</button>';
-  html += '<button class="interact-choice-btn" onclick="_approvalChoice(\'' + esc(request_id) + '\',\'always\')">Always allow</button>';
-  html += '<button class="interact-choice-btn danger" onclick="_approvalChoice(\'' + esc(request_id) + '\',\'deny\')">Deny</button>';
+  html += '<button class="interact-choice-btn primary" onclick="_approvalChoice(\'once\')">Allow once</button>';
+  html += '<button class="interact-choice-btn" onclick="_approvalChoice(\'session\')">Allow for this session</button>';
+  html += '<button class="interact-choice-btn" onclick="_approvalChoice(\'always\')">Always allow</button>';
+  html += '<button class="interact-choice-btn danger" onclick="_approvalChoice(\'deny\')">Deny</button>';
   html += '</div>';
 
   const overlay = document.createElement('div');
@@ -1541,9 +1554,16 @@ function showApprovalUI(payload) {
   document.body.appendChild(overlay);
 }
 
-function _approvalChoice(requestId, choice) {
+function _approvalChoice(choice) {
   _dismissInteract();
-  rpc('approval.respond', { choice, request_id: requestId }).catch(() => {});
+  const params = { choice };
+  if (window._approvalSid) params.session_id = window._approvalSid;
+  console.log('[approval] responding:', JSON.stringify(params));
+  rpc('approval.respond', params).then(r => {
+    console.log('[approval] response:', JSON.stringify(r));
+  }).catch(e => {
+    console.error('[approval] respond failed:', e);
+  });
 }
 
 function showSudoUI(payload) {
@@ -1616,11 +1636,11 @@ async function hermesHTTP(method, path, body) {
 async function loadServerSessions() {
   try {
     const data = await hermesHTTP('GET', '/api/sessions');
-    const serverKeys = new Set((data.sessions || []).map(s => s.id));
+    const serverKeys = new Set((data.sessions || []).filter(s => s.end_reason !== 'compression').map(s => s.id));
     const byKey = {};
     for (const c of Object.values(conversations)) { if (c.sessionKey) byKey[c.sessionKey] = c; }
 
-    for (const s of (data.sessions || [])) {
+    for (const s of (data.sessions || []).filter(s => s.end_reason !== 'compression')) {
       const local = byKey[s.id];
       if (local) {
         if (s.title && s.title !== 'New chat' && s.title !== 'Untitled') local.title = s.title;
