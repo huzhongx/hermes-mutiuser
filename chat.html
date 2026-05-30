@@ -242,6 +242,63 @@ body {
   background: var(--chat-bg);
 }
 
+/* ── Files panel (right-side overlay) ── */
+.files-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 300px;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  background: var(--sidebar);
+  border-left: 1px solid var(--border);
+  transform: translateX(100%);
+  transition: transform 0.2s ease;
+}
+.files-panel.open {
+  transform: translateX(0);
+}
+.files-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  font-size: 14px;
+}
+.files-panel-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 0;
+}
+.file-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 16px;
+  cursor: pointer;
+  font-size: 13px;
+  border-bottom: 1px solid var(--border);
+}
+.file-item:hover {
+  background: var(--hover);
+}
+.file-item-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  margin-right: 8px;
+}
+.file-item-meta {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 /* ── Settings overlay (covers chat area) ── */
 .settings-col {
   position: absolute;
@@ -357,6 +414,26 @@ body {
 .md-code-copy { position: absolute; top: 6px; right: 6px; background: var(--sidebar); border: 1px solid var(--border); border-radius: 6px; padding: 3px 8px; font-size: 11px; cursor: pointer; color: var(--text-dim); opacity: 0; transition: opacity .15s; }
 .msg.assistant .msg-body.md pre:hover .md-code-copy { opacity: 1; }
 .md-code-copy:hover { background: var(--hover); color: var(--text); }
+.tool-chain { max-width: 680px; margin: 6px auto; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; animation: slideDown 0.2s ease; }
+.tool-chain-header { display: flex; align-items: center; gap: 8px; padding: 8px 14px; background: var(--sidebar); cursor: pointer; user-select: none; font-size: 12px; color: var(--text-dim); }
+.tool-chain-header:hover { background: var(--hover); }
+.tool-chain-arrow { font-size: 10px; transition: transform 0.2s; display: inline-block; }
+.tool-chain-arrow.open { transform: rotate(90deg); }
+.tool-chain-label { flex: 1; font-weight: 500; }
+.tool-chain-status { font-size: 11px; white-space: nowrap; }
+.tool-chain-status.done { color: var(--success); }
+.tool-chain-status.running { color: var(--accent); }
+.tool-chain-body { display: none; padding: 10px 14px; background: var(--sidebar); border-top: 1px solid var(--border); font-size: 13px; max-height: 400px; overflow-y: auto; }
+.tool-chain-body.open { display: block; }
+.chain-step { padding: 6px 0; border-bottom: 1px dashed var(--border); }
+.chain-step:last-child { border-bottom: none; }
+.chain-step-name { font-family: monospace; font-size: 12px; font-weight: 600; color: var(--text); margin-bottom: 3px; }
+.chain-step-status { font-size: 11px; margin-left: 6px; }
+.chain-step-status.running { color: var(--accent); }
+.chain-step-status.done { color: var(--success); }
+.chain-step-status.error { color: var(--danger); }
+.chain-step-input { font-size: 12px; color: var(--text-dim); padding: 2px 0 2px 12px; border-left: 2px solid var(--border); margin: 3px 0; white-space: pre-wrap; word-break: break-all; max-height: 80px; overflow-y: auto; }
+.chain-step-output { font-size: 12px; color: var(--text-dim); padding: 2px 0 2px 12px; border-left: 2px solid var(--success); margin: 3px 0; white-space: pre-wrap; word-break: break-all; max-height: 80px; overflow-y: auto; }
 .msg.system .msg-body { font-size: 12px; color: var(--text-dim); font-style: italic; }
 .att-card { display: inline-flex; align-items: center; gap: 8px; background: var(--user-bubble); border-radius: 12px; padding: 8px 12px; max-width: 260px; overflow: hidden; cursor: pointer; text-decoration: none; color: inherit; transition: background .15s; }
 .att-card:hover { background: var(--hover); }
@@ -452,7 +529,7 @@ body {
   resize: none;
   outline: none;
   min-height: 28px;
-  max-height: 160px;
+  max-height: 40vh;
   line-height: 1.5;
 }
 
@@ -795,6 +872,7 @@ body {
     <div class="footer-user">
       <span class="user-avatar" id="userAvatar"></span>
       <span class="user-name" id="footerUserName"></span>
+      <button class="btn-icon-sm" onclick="toggleFilesPanel()" title="Files">&#128193;</button>
       <button class="btn-icon-sm" onclick="openSettings()" title="Settings">&#9881;</button>
       <button class="btn-icon-sm" onclick="disconnect()" title="Disconnect" style="margin-left:-2px">&#x23FB;</button>
     </div>
@@ -848,6 +926,15 @@ body {
       <button class="btn-icon send" id="sendBtn" onclick="sendMessage()" disabled title="Send">&#10148;</button>
     </div>
   </div>
+  <div class="files-panel" id="filesPanel">
+    <div class="files-panel-header">
+      <span>Files</span>
+      <button onclick="toggleFilesPanel()" style="background:none;border:none;color:var(--fg);cursor:pointer;font-size:18px">&times;</button>
+    </div>
+    <div class="files-panel-body" id="filesPanelBody">
+      <div style="padding:16px;color:var(--muted);font-size:13px">No files yet</div>
+    </div>
+  </div>
   <div class="settings-col" id="settingsCol" style="display:none">
     <div class="settings-nav">
       <button class="snav-item active" data-nav="model" onclick="switchNav('model')">Model</button>
@@ -875,6 +962,7 @@ let rpcId = 0;
 let pending = {};
 let activeConvId = null;
 let streamState = {};
+let _toolStepSeq = 0;
 let _heartbeatTimer = null;
 let _reconnectTimer = null;
 let _sending = false;  // send lock: prevents concurrent prompt.submit
@@ -919,7 +1007,7 @@ function isConvStreaming(id) { return !!streamState[id]; }
 // ── Textarea ──
 $('input').addEventListener('input', function() {
   this.style.height = 'auto';
-  this.style.height = Math.min(this.scrollHeight, 160) + 'px';
+  this.style.height = Math.min(this.scrollHeight, window.innerHeight * 0.4) + 'px';
 });
 
 $('input').addEventListener('keydown', e => {
@@ -1132,6 +1220,16 @@ function handleWS(data, initResolve) {
           save();
         }
         renderSessionList();
+        // 标记思维链为完成
+        const chainStatus = $('chainStatus-' + convId);
+        if (chainStatus) { chainStatus.textContent = 'done'; chainStatus.className = 'tool-chain-status done'; }
+        const chainLabel = document.querySelector('#toolChain-' + convId + ' .tool-chain-label');
+        if (chainLabel) chainLabel.textContent = 'Thought for ' + _toolStepSeq + ' steps';
+        // 收起链体
+        const chainBody = $('chainBody-' + convId);
+        if (chainBody) chainBody.classList.remove('open');
+        const chainArrow = document.querySelector('#toolChain-' + convId + ' .tool-chain-arrow');
+        if (chainArrow) chainArrow.classList.remove('open');
         enableInput();
         if (conv && !conv.sessionKey) fetchSessionKey(conv.id);
         if (conv?.hermesSid) fetchUsage(conv.id);
@@ -1150,6 +1248,54 @@ function handleWS(data, initResolve) {
       if (convId === activeConvId) {
         hideEmpty();
         const toolName = data.params?.payload?.name || 'Unknown';
+        const toolInput = data.params?.payload?.input || '';
+        _toolStepSeq++;
+        const seq = _toolStepSeq;
+
+        // 获取或创建思维链容器
+        const msgArea = $('messages');
+        let chain = $('toolChain-' + convId);
+        if (!chain) {
+          chain = document.createElement('div');
+          chain.className = 'tool-chain';
+          chain.id = 'toolChain-' + convId;
+          chain.innerHTML = `
+            <div class="tool-chain-header" onclick="this.nextElementSibling.classList.toggle('open');this.querySelector('.tool-chain-arrow').classList.toggle('open')">
+              <span class="tool-chain-arrow">&#9654;</span>
+              <span class="tool-chain-label">Thinking...</span>
+              <span class="tool-chain-status running" id="chainStatus-${convId}">running</span>
+            </div>
+            <div class="tool-chain-body" id="chainBody-${convId}"></div>
+          `;
+          // 插入到 streamingMsg 之前（如果存在），否则追加末尾
+          const streamEl = document.getElementById('streamingMsg');
+          if (streamEl) msgArea.insertBefore(chain, streamEl);
+          else msgArea.appendChild(chain);
+        }
+
+        // 更新 chain header 状态
+        const chainLabel = chain.querySelector('.tool-chain-label');
+        if (chainLabel) chainLabel.textContent = 'Step ' + seq + ': ' + esc(toolName);
+        const chainStatus = $('chainStatus-' + convId);
+        if (chainStatus) { chainStatus.textContent = 'running'; chainStatus.className = 'tool-chain-status running'; }
+
+        // 在 chain body 里追加步骤
+        const body = $('chainBody-' + convId);
+        if (body) {
+          const step = document.createElement('div');
+          step.className = 'chain-step';
+          step.id = 'chainStep-' + seq;
+          step.innerHTML = `
+            <div class="chain-step-name">${esc(toolName)} <span class="chain-step-status running" id="csStatus-${seq}">&#9203; running</span></div>
+            ${toolInput ? `<div class="chain-step-input">${esc(toolInput.length > 500 ? toolInput.substring(0, 500) + '...' : toolInput)}</div>` : ''}
+          `;
+          body.appendChild(step);
+          // 自动展开
+          body.classList.add('open');
+          chain.querySelector('.tool-chain-arrow').classList.add('open');
+          scrollBottom();
+        }
+
         showToolThinking(toolName);
       }
       return;
@@ -1158,6 +1304,30 @@ function handleWS(data, initResolve) {
       const convId = convByHermesSid(evtSid);
       if (convId === activeConvId) {
         const toolName = data.params?.payload?.name || '';
+        const payload = data.params?.payload || {};
+        const duration = payload.duration ? (payload.duration.toFixed(1) + 's') : '';
+        const output = payload.output || '';
+        const error = payload.error || payload.status === 'error';
+        const seq = _toolStepSeq;
+
+        // 更新步骤状态
+        const stepEl = $('chainStep-' + seq);
+        if (stepEl) {
+          const st = $('csStatus-' + seq);
+          if (st) {
+            st.textContent = error ? '\u2717 error' : '\u2713 ' + (duration || 'done');
+            st.className = 'chain-step-status ' + (error ? 'error' : 'done');
+          }
+          if (output) {
+            const outEl = document.createElement('div');
+            outEl.className = 'chain-step-output';
+            outEl.textContent = output.length > 300 ? output.substring(0, 300) + '...' : output;
+            stepEl.appendChild(outEl);
+          }
+          scrollBottom();
+        }
+
+        // 更新 thinking bar
         const tb = $('thinkingBar');
         if (tb && tb.style.display !== 'none') {
           const tt = $('thinkingText');
@@ -1175,6 +1345,8 @@ function handleWS(data, initResolve) {
           }, 1500);
         }
       }
+      // Auto-refresh files panel on write-related tool completion
+      if (filesPanelOpen && /^(write|edit|save)/i.test(toolName)) refreshFilesList();
       return;
     }
     if (['tool.complete','session.info','thinking.delta','reasoning.delta','reasoning.available','status.update'].includes(t)) return;
@@ -1520,6 +1692,7 @@ async function fetchSessionKey(convId) {
 
 function doSwitchConv(convId) {
   activeConvId = convId;
+  _toolStepSeq = 0;
   renderSessionList(); renderMessages(); enableInput();
 }
 
@@ -1676,11 +1849,27 @@ async function uploadFiles(fileList) {
   for (const file of fileList) {
     showStatusBar('Uploading ' + file.name + '\u2026');
     try {
+      // Try multipart first; fall back to JSON+base64 if proxy rejects multipart
       const formData = new FormData();
       formData.append('file', file);
-      const opts = { method: 'POST', body: formData, credentials: 'include' };
+      let r = await fetch('/api/upload', { method: 'POST', body: formData, credentials: 'include' });
 
-      const r = await fetch('/api/upload', opts);
+      // If multipart failed with 415 (e.g. agent-gateway proxy), retry with JSON+base64
+      if (r.status === 415) {
+        const b64 = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result.split(',')[1]);
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+        r = await fetch('/api/upload', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filename: file.name, data: b64 }),
+          credentials: 'include',
+        });
+      }
+
       if (!r.ok) throw new Error('Upload failed: HTTP ' + r.status);
       const result = await r.json();
 
@@ -1694,6 +1883,7 @@ async function uploadFiles(fileList) {
       showStatusBar(file.name + ' ready (' + _fmtSize(file.size) + ')');
       setTimeout(() => hideStatusBar(), 2000);
       $('input')?.focus();
+      if (filesPanelOpen) refreshFilesList();
     } catch (e) {
       addSystemMsg('Upload failed (' + file.name + '): ' + e.message);
     }
@@ -2077,6 +2267,39 @@ function closeSettings() {
   $('settingsCol').style.display = 'none';
 }
 
+// ── Files panel ──
+let filesPanelOpen = false;
+
+function toggleFilesPanel() {
+  const panel = $('filesPanel');
+  filesPanelOpen = !filesPanelOpen;
+  panel.classList.toggle('open', filesPanelOpen);
+  if (filesPanelOpen) refreshFilesList();
+}
+
+function refreshFilesList() {
+  fetch('/api/files', { headers: { 'Authorization': 'Bearer ' + wsToken } })
+    .then(r => r.json())
+    .then(files => {
+      const body = $('filesPanelBody');
+      if (!files.length) {
+        body.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:13px">No files yet</div>';
+        return;
+      }
+      body.innerHTML = files.map(f => {
+        const size = f.size < 1024 ? f.size + ' B' :
+                     f.size < 1048576 ? (f.size/1024).toFixed(1) + ' KB' :
+                     (f.size/1048576).toFixed(1) + ' MB';
+        const time = new Date(f.mtime * 1000).toLocaleTimeString();
+        return `<div class="file-item" onclick="window.open('/api/files/${encodeURIComponent(f.name)}')">
+          <span class="file-item-name">${esc(f.name)}</span>
+          <span class="file-item-meta">${size} &middot; ${time}</span>
+        </div>`;
+      }).join('');
+    })
+    .catch(() => {});
+}
+
 function switchNav(section) {
   _settingsNav = section;
   document.querySelectorAll('.snav-item').forEach(b => b.classList.toggle('active', b.dataset.nav === section));
@@ -2365,6 +2588,8 @@ async function loadSettingsCron() {
               ? `<button class="cron-btn" onclick="cronAction('${esc(j.id)}','resume')">Resume</button>`
               : `<button class="cron-btn" onclick="cronAction('${esc(j.id)}','pause')">Pause</button>`}
             <button class="cron-btn" onclick="cronAction('${esc(j.id)}','trigger')">Trigger</button>
+            <button class="cron-btn" onclick="showCronDetail('${esc(j.id)}')">Details</button>
+            <button class="cron-btn" onclick="editCronJob('${esc(j.id)}')">Edit</button>
             <button class="cron-btn danger" onclick="cronAction('${esc(j.id)}','delete')">Delete</button>
           </div>
         </div>
@@ -2721,6 +2946,140 @@ async function createCronJob() {
   } catch (e) { addSystemMsg('Failed to create: ' + e.message); }
 }
 
+async function showCronDetail(id) {
+  const modal = $('skillDetailModal');
+  if (!modal) return;
+  modal.innerHTML = '<div class="skill-detail" onclick="if(event.target===this)this.remove()"><div class="skill-detail-card" style="position:relative"><div style="text-align:center;padding:30px;color:var(--text-dim)">Loading...</div></div></div>';
+  try {
+    const data = await hermesHTTP('GET', '/api/cron/jobs');
+    const jobs = Array.isArray(data) ? data : (data.jobs || []);
+    const j = jobs.find(x => x.id === id);
+    if (!j) throw new Error('Task not found');
+    const paused = j.paused || j.status === 'paused';
+    const schedule = j.schedule || j.cron || '';
+    const created = j.created_at ? new Date(j.created_at).toLocaleString() : '-';
+    const lastRun = j.last_run ? new Date(j.last_run).toLocaleString() : '-';
+    let html = '<div class="skill-detail" onclick="if(event.target===this)this.remove()"><div class="skill-detail-card" style="position:relative">';
+    html += '<button class="sd-close" onclick="this.closest(\'.skill-detail\').remove()">\u2715</button>';
+    html += '<h2>' + esc(j.name || j.id || 'Untitled') + '</h2>';
+    html += '<div class="sd-section"><div class="sd-label">Status</div><div class="sd-text"><span class="sd-tag" style="' + (paused ? 'color:var(--danger)' : 'color:var(--success)') + '">' + (paused ? 'Paused' : 'Active') + '</span></div></div>';
+    html += '<div class="sd-section"><div class="sd-label">Schedule</div><div class="sd-text">' + esc(humanizeSchedule(schedule)) + '  <span style="color:var(--text-dim)">(' + esc(schedule) + ')</span></div></div>';
+    html += '<div class="sd-section"><div class="sd-label">Prompt</div><div class="sd-text" style="max-height:200px;overflow-y:auto">' + esc(j.prompt || '') + '</div></div>';
+    html += '<div class="sd-section"><div class="sd-label">Created</div><div class="sd-text">' + esc(created) + '</div></div>';
+    html += '<div class="sd-section"><div class="sd-label">Last Run</div><div class="sd-text">' + esc(lastRun) + '</div></div>';
+    html += '<div class="sd-actions"><button class="btn btn-primary" onclick="this.closest(\'.skill-detail\').remove();editCronJob(\'' + esc(id) + '\')">Edit</button>';
+    html += '<button class="btn" onclick="this.closest(\'.skill-detail\').remove()">Close</button></div>';
+    html += '</div></div>';
+    modal.innerHTML = html;
+  } catch (e) {
+    modal.innerHTML = '<div class="skill-detail" onclick="if(event.target===this)this.remove()"><div class="skill-detail-card"><div style="color:var(--danger);padding:20px">Failed to load: ' + esc(e.message) + '</div><button class="btn" onclick="this.closest(\'.skill-detail\').remove()">Close</button></div></div>';
+  }
+}
+
+function detectCronFreq(expr) {
+  if (!expr) return 'daily';
+  const p = expr.trim().split(/\s+/);
+  if (p.length !== 5) return 'custom';
+  const [min, hour, dom, mon, dow] = p;
+  if (min.startsWith('*/') && hour === '*' && dom === '*' && mon === '*' && dow === '*') return 'every-n-min';
+  if (min !== '*' && hour === '*' && dom === '*' && mon === '*' && dow === '*') return 'hourly';
+  if (min !== '*' && hour !== '*' && dom === '*' && mon === '*' && dow === '*') return 'daily';
+  if (min !== '*' && hour !== '*' && dom === '*' && mon === '*' && dow !== '*') return 'weekly';
+  return 'custom';
+}
+
+function cronFreqDefaults(freq, expr) {
+  if (!expr) return {};
+  const p = expr.trim().split(/\s+/);
+  if (p.length !== 5) return { cronExpr: expr };
+  const [min, hour, dom, mon, dow] = p;
+  if (freq === 'every-n-min') return { nMin: parseInt(min.slice(2)) || 30 };
+  if (freq === 'hourly') return { hMin: parseInt(min) || 0 };
+  if (freq === 'daily') return { dTime: (hour || '9').padStart(2, '0') + ':' + (min || '0').padStart(2, '0') };
+  if (freq === 'weekly') return { wDay: dow || '1', wTime: (hour || '9').padStart(2, '0') + ':' + (min || '0').padStart(2, '0') };
+  return { cronExpr: expr };
+}
+
+async function editCronJob(id) {
+  const modal = $('skillDetailModal');
+  if (!modal) return;
+  modal.innerHTML = '<div class="skill-detail" onclick="if(event.target===this)this.remove()"><div class="skill-detail-card" style="position:relative"><div style="text-align:center;padding:30px;color:var(--text-dim)">Loading...</div></div></div>';
+  try {
+    const data = await hermesHTTP('GET', '/api/cron/jobs');
+    const jobs = Array.isArray(data) ? data : (data.jobs || []);
+    const j = jobs.find(x => x.id === id);
+    if (!j) throw new Error('Task not found');
+    const schedule = j.schedule || j.cron || '';
+    const freq = detectCronFreq(schedule);
+    const defs = cronFreqDefaults(freq, schedule);
+    _cronFreq = freq;
+    let html = '<div class="skill-detail" onclick="if(event.target===this)this.remove()"><div class="skill-detail-card" style="position:relative">';
+    html += '<button class="sd-close" onclick="this.closest(\'.skill-detail\').remove()">\u2715</button>';
+    html += '<h2>Edit Task</h2>';
+    html += '<div class="sd-section"><div class="sd-label">Name</div><input id="cronEditName" value="' + esc(j.name || '') + '" style="width:100%;padding:6px 10px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px"></div>';
+    html += '<div class="sd-section"><div class="sd-label">Frequency</div>';
+    html += '<div class="cron-freq-btns" id="cronEditFreqBtns">';
+    const freqs = [['every-n-min','Every N min'],['hourly','Hourly'],['daily','Daily'],['weekly','Weekly'],['custom','Custom']];
+    for (const [f, label] of freqs) {
+      html += '<button class="cron-freq-btn' + (f === freq ? ' active' : '') + '" onclick="setCronFreq(\'' + f + '\',this)">' + label + '</button>';
+    }
+    html += '</div></div>';
+    html += '<div id="cronEditFreqFields" class="sd-section"></div>';
+    html += '<div class="sd-section"><div class="sd-label">Prompt</div><textarea id="cronEditPrompt" style="width:100%;min-height:80px;padding:6px 10px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;resize:vertical">' + esc(j.prompt || '') + '</textarea></div>';
+    html += '<div class="sd-section"><div class="sd-label">Schedule</div><div class="sd-text" id="cronEditPreview" style="font-size:12px;color:var(--text-dim)"></div></div>';
+    html += '<div class="sd-actions"><button class="btn btn-primary" onclick="saveCronEdit(\'' + esc(id) + '\')">Save</button>';
+    html += '<button class="btn" onclick="this.closest(\'.skill-detail\').remove()">Cancel</button></div>';
+    html += '</div></div>';
+    modal.innerHTML = html;
+
+    // Populate frequency fields
+    _cronFreq = freq;
+    const fieldsArea = $('cronEditFreqFields');
+    if (freq === 'every-n-min') {
+      fieldsArea.innerHTML = '<div class="cron-row"><label style="font-size:12px;flex:none;margin-right:4px">Every</label><input id="cronNMin" type="number" min="1" value="' + (defs.nMin || 30) + '" style="max-width:80px"><label style="font-size:12px;flex:none">minutes</label></div>';
+    } else if (freq === 'hourly') {
+      fieldsArea.innerHTML = '<div class="cron-row"><label style="font-size:12px;flex:none;margin-right:4px">At minute</label><input id="cronHMin" type="number" min="0" max="59" value="' + (defs.hMin || 0) + '" style="max-width:80px"></div>';
+    } else if (freq === 'daily') {
+      fieldsArea.innerHTML = '<div class="cron-row"><input id="cronDTime" type="time" value="' + (defs.dTime || '09:00') + '"></div>';
+    } else if (freq === 'weekly') {
+      fieldsArea.innerHTML = '<div class="cron-row"><select id="cronWDay"><option value="1" ' + (defs.wDay === '1' ? 'selected' : '') + '>Monday</option><option value="2" ' + (defs.wDay === '2' ? 'selected' : '') + '>Tuesday</option><option value="3" ' + (defs.wDay === '3' ? 'selected' : '') + '>Wednesday</option><option value="4" ' + (defs.wDay === '4' ? 'selected' : '') + '>Thursday</option><option value="5" ' + (defs.wDay === '5' ? 'selected' : '') + '>Friday</option><option value="6" ' + (defs.wDay === '6' ? 'selected' : '') + '>Saturday</option><option value="0" ' + (defs.wDay === '0' ? 'selected' : '') + '>Sunday</option></select><input id="cronWTime" type="time" value="' + (defs.wTime || '09:00') + '"></div>';
+    } else {
+      fieldsArea.innerHTML = '<input id="cronCronExpr" value="' + esc(defs.cronExpr || '') + '" placeholder="Cron expression (e.g. */15 * * * *)">';
+    }
+
+    // Update preview
+    const previewEl = $('cronEditPreview');
+    if (previewEl) {
+      previewEl.textContent = humanizeSchedule(schedule) + '  (' + schedule + ')';
+    }
+
+    // Bind input events for preview update in edit modal
+    fieldsArea.querySelectorAll('input, select').forEach(el => {
+      el.addEventListener('input', () => {
+        const expr = buildCronExpr();
+        if (previewEl) previewEl.textContent = expr ? humanizeSchedule(expr) + '  (' + expr + ')' : '';
+      });
+    });
+  } catch (e) {
+    modal.innerHTML = '<div class="skill-detail" onclick="if(event.target===this)this.remove()"><div class="skill-detail-card"><div style="color:var(--danger);padding:20px">Failed to load: ' + esc(e.message) + '</div><button class="btn" onclick="this.closest(\'.skill-detail\').remove()">Close</button></div></div>';
+  }
+}
+
+async function saveCronEdit(id) {
+  const name = $('cronEditName')?.value?.trim() || 'Untitled';
+  const prompt = $('cronEditPrompt')?.value?.trim();
+  const schedule = buildCronExpr();
+  if (!schedule) { addSystemMsg('Please set a schedule'); return; }
+  if (!prompt) { addSystemMsg('Please enter a prompt'); return; }
+  try {
+    await hermesHTTP('PUT', '/api/cron/jobs/' + id, { name, schedule, prompt });
+    addSystemMsg('Task updated');
+    const modal = $('skillDetailModal');
+    if (modal) modal.innerHTML = '';
+    loadSettingsCron();
+  } catch (e) { addSystemMsg('Update failed: ' + e.message); }
+}
+
 async function cronAction(id, action) {
   try {
     if (action === 'delete') {
@@ -2734,7 +3093,7 @@ async function cronAction(id, action) {
   } catch (e) { addSystemMsg('Action failed: ' + e.message); }
 }
 
-document.addEventListener('keydown', e => { if (e.key === 'Escape' && $('settingsCol').style.display !== 'none') closeSettings(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') { if (filesPanelOpen) toggleFilesPanel(); else if ($('settingsCol').style.display !== 'none') closeSettings(); } });
 
 // ── Init: detect auth mode, auto-connect ──
 (async function() {

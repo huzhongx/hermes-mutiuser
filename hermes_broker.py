@@ -170,12 +170,15 @@ class ProcessBroker:
 
         return self._make_info(proc)
 
-    async def release(self, user_id: str):
+    async def release(self, user_id: str, flush: bool = True):
         async with self._lock:
             proc = self._procs.pop(user_id, None)
         if not proc:
             return
-        await self._kill(proc)
+        if flush:
+            await self._flush_and_kill(proc)
+        else:
+            await self._kill(proc)
         self._free_port(proc.port)
         # Only clean up the session work_dir (logs etc.), preserve hermes_home (state.db)
         if proc.work_dir and os.path.exists(proc.work_dir):
@@ -401,7 +404,50 @@ class ProcessBroker:
                 continue
         raise RuntimeError("dashboard 启动超时")
 
+    async def _flush_and_kill(self, proc: HermesProcess):
+        """Notify Hermes process to flush state, then terminate gracefully."""
+        p = proc.process
+        if p is None or p.returncode is not None:
+            return
+        # Ask Hermes to close all sessions (triggers state.db flush)
+        try:
+            async with aiohttp.ClientSession() as session:
+                url = f"http://127.0.0.1:{proc.port}/api/sessions"
+                headers = {"Authorization": f"Bearer {proc.ws_token}"}
+                async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=3)) as resp:
+                    if resp.status == 200:
+                        sessions = await resp.json()
+                        for s in sessions:
+                            key = s.get("sessionKey") or s.get("key")
+                            if key:
+                                try:
+                                    await session.delete(
+                                        f"http://127.0.0.1:{proc.port}/api/sessions/{key}",
+                                        headers=headers,
+                                        timeout=aiohttp.ClientTimeout(total=3),
+                                    )
+                                except Exception:
+                                    pass
+        except Exception:
+            pass
+        # Now terminate — Hermes SIGTERM handler will drain remaining work
+        try:
+            p.terminate()
+            await asyncio.wait_for(p.wait(), timeout=10)
+        except (asyncio.TimeoutError, ProcessLookupError):
+            try:
+                p.kill()
+            except ProcessLookupError:
+                pass
+        if proc._log_fh:
+            try:
+                proc._log_fh.close()
+            except Exception:
+                pass
+        logger.info(f"[{proc.user_id}] 进程 PID={proc.pid} 已终止")
+
     async def _kill(self, proc: HermesProcess):
+        """Quick kill without flush (for warm pool cleanup, etc.)."""
         p = proc.process
         if p is None or p.returncode is not None:
             return
@@ -765,19 +811,34 @@ async def _get_proxy_http() -> aiohttp.ClientSession:
 
 
 async def _proc_for_request(request: Request) -> HermesProcess:
-    """Authenticate and return the user's process. Supports JWT cookie and legacy user_id."""
+    """Authenticate and return the user's process. Supports JWT cookie,
+    X-Hermes-Session-Token (dashboard session token), and legacy user_id."""
+    # 1. JWT cookie
     user = _get_session_user(request)
     if user:
         user_id = user["sub"]
     else:
-        # Legacy fallback: try header first, then body
+        user_id = ""
+
+    # 2. X-Hermes-Session-Token — find the proc that owns this token
+    if not user_id:
+        session_token = request.headers.get("X-Hermes-Session-Token", "")
+        if session_token:
+            for uid, proc in broker._procs.items():
+                if getattr(proc, 'ws_token', '') == session_token:
+                    user_id = uid
+                    break
+
+    # 3. Legacy fallback: header or body
+    if not user_id:
         user_id = request.headers.get("X-User-ID", "")
-        if not user_id:
-            try:
-                body = await request.json()
-                user_id = (body or {}).get("user_id", "")
-            except Exception:
-                pass
+    if not user_id:
+        try:
+            body = await request.json()
+            user_id = (body or {}).get("user_id", "")
+        except Exception:
+            pass
+
     if not user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
     proc = broker.get(user_id)
@@ -925,27 +986,57 @@ async def ws_proxy(websocket: WebSocket):
 
 @app.post("/api/upload")
 async def proxy_upload(request: Request):
-    """Upload file to user's process. Same logic as /broker/upload but JWT-only."""
+    """Upload file to user's process. Supports multipart/form-data and JSON (base64)."""
+    import base64
     proc = await _proc_for_request(request)
     ct = request.headers.get("content-type", "")
-    if not ct.startswith("multipart/form-data"):
-        raise HTTPException(status_code=400, detail="multipart/form-data required")
 
-    form = await request.form()
-    upload = form.get("file")
-    if not upload or not upload.filename:
-        raise HTTPException(status_code=400, detail="file field required")
+    if ct.startswith("multipart/form-data"):
+        # Original multipart path
+        form = await request.form()
+        upload = form.get("file")
+        if not upload or not upload.filename:
+            raise HTTPException(status_code=400, detail="file field required")
+        filename = upload.filename
+        content = await upload.read()
+    elif ct.startswith("application/json"):
+        # JSON + base64 path (for proxies that can't forward multipart)
+        body = await request.json()
+        filename = body.get("filename") or body.get("name")
+        b64 = body.get("data") or body.get("content") or body.get("file")
+        if not filename or not b64:
+            raise HTTPException(status_code=400, detail="filename and data (base64) required")
+        content = base64.b64decode(b64)
+    else:
+        raise HTTPException(status_code=415, detail="Content-Type must be multipart/form-data or application/json")
 
     uploads_dir = Path(proc.work_dir) / "uploads"
     uploads_dir.mkdir(parents=True, exist_ok=True)
 
-    safe_name = re.sub(r'[^\w.\-]', '_', upload.filename)
+    safe_name = re.sub(r'[^\w.\-]', '_', filename)
     dest = uploads_dir / safe_name
-    content = await upload.read()
     dest.write_bytes(content)
 
     logger.info(f"[{proc.user_id}] File uploaded: {dest} ({len(content)} bytes)")
-    return {"name": safe_name, "size": len(content)}
+    return {"path": str(dest), "name": safe_name, "size": len(content)}
+
+
+@app.get("/api/files")
+async def list_files(request: Request):
+    """List uploaded files (JWT auth)."""
+    proc = await _proc_for_request(request)
+    uploads = Path(proc.work_dir) / "uploads"
+    result = []
+    if uploads.is_dir():
+        for f in sorted(uploads.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+            if f.is_file() and not f.name.startswith('.'):
+                stat = f.stat()
+                result.append({
+                    "name": f.name,
+                    "size": stat.st_size,
+                    "mtime": stat.st_mtime,
+                })
+    return result
 
 
 @app.get("/api/files/{filename}")
@@ -961,20 +1052,29 @@ async def proxy_download(filename: str, request: Request):
 @app.post("/api/skills/upload")
 async def proxy_skill_upload(request: Request):
     """Upload a skill zip and install to user's Hermes skills directory."""
+    import base64
     proc = await _proc_for_request(request)
     ct = request.headers.get("content-type", "")
-    if not ct.startswith("multipart/form-data"):
-        raise HTTPException(status_code=400, detail="multipart/form-data required")
 
-    form = await request.form()
-    upload = form.get("file")
-    if not upload or not upload.filename:
-        raise HTTPException(status_code=400, detail="file field required")
+    if ct.startswith("multipart/form-data"):
+        form = await request.form()
+        upload = form.get("file")
+        if not upload or not upload.filename:
+            raise HTTPException(status_code=400, detail="file field required")
+        filename = upload.filename
+        content = await upload.read()
+    elif ct.startswith("application/json"):
+        body = await request.json()
+        filename = body.get("filename") or body.get("name", "")
+        b64 = body.get("data") or body.get("content") or body.get("file")
+        if not filename or not b64:
+            raise HTTPException(status_code=400, detail="filename and data (base64) required")
+        content = base64.b64decode(b64)
+    else:
+        raise HTTPException(status_code=415, detail="Content-Type must be multipart/form-data or application/json")
 
-    if not upload.filename.endswith(".zip"):
+    if not filename.endswith(".zip"):
         raise HTTPException(status_code=400, detail="Only .zip files are supported")
-
-    content = await upload.read()
 
     # Determine skills directory: {hermes_home}/skills/
     user_home = Path(proc.work_dir).parent / "hermes_home"
