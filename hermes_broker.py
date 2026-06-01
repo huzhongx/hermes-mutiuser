@@ -134,6 +134,8 @@ class ProcessBroker:
 
     async def start(self):
         self.work_root.mkdir(parents=True, exist_ok=True)
+        # Kill any leftover Hermes dashboard processes from previous broker runs
+        await self._cleanup_stale_processes()
         self._cleanup_task = asyncio.create_task(self._cleanup_loop())
         self._warm_task = asyncio.create_task(self._warm_maintainer())
         logger.info(f"ProcessBroker started, warm_pool={self.warm_pool_size}")
@@ -153,6 +155,36 @@ class ProcessBroker:
         for uid in list(self._procs):
             await self.release(uid)
         logger.info("ProcessBroker stopped")
+
+    async def _cleanup_stale_processes(self):
+        """Kill Hermes dashboard processes that are listening on broker ports
+        but not managed by this broker instance (leftover from crash/restart)."""
+        try:
+            result = await asyncio.create_subprocess_exec(
+                "ss", "-tlnp",
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await result.communicate()
+            for line in stdout.decode().splitlines():
+                # Only consider ports in broker's range
+                m_port = re.search(r':(\d+)', line)
+                if not m_port:
+                    continue
+                port = int(m_port.group(1))
+                if port < self.base_port or port > self.max_port:
+                    continue
+                m = re.search(r'pid=(\d+)', line)
+                if m:
+                    pid = int(m.group(1))
+                    try:
+                        os.kill(pid, 9)
+                        logger.info(f"清理残留 Hermes 进程 PID={pid} port={port}")
+                    except ProcessLookupError:
+                        pass
+                    except PermissionError:
+                        pass
+        except Exception as e:
+            logger.warning(f"清理残留进程失败: {e}")
 
     # ── 核心接口：分配 ────────────────────────────────────
 
@@ -307,12 +339,15 @@ class ProcessBroker:
 
         if session_id is None:
             # Reuse existing orphan work_dir if any (survives broker restart)
-            existing_dirs = sorted(
-                (d for d in user_base.iterdir() if d.is_dir() and d.name not in ("hermes_home",)),
-                key=lambda d: d.stat().st_mtime,
-                reverse=True,
-            )
-            session_id = existing_dirs[0].name if existing_dirs else str(uuid.uuid4())
+            if user_base.is_dir():
+                existing_dirs = sorted(
+                    (d for d in user_base.iterdir() if d.is_dir() and d.name not in ("hermes_home",)),
+                    key=lambda d: d.stat().st_mtime,
+                    reverse=True,
+                )
+                session_id = existing_dirs[0].name if existing_dirs else str(uuid.uuid4())
+            else:
+                session_id = str(uuid.uuid4())
 
         work_dir = user_base / session_id
         work_dir.mkdir(parents=True, exist_ok=True)
@@ -1239,10 +1274,11 @@ async def proxy_upload(request: Request):
 
 
 @app.get("/api/files")
-async def list_files(request: Request, scope: str = "all"):
+async def list_files(request: Request, scope: str = "all", session: str = ""):
     """List files (JWT auth).
-    scope=current: only current session's work_dir.
-    scope=all: all session work_dirs under user_root."""
+    session=current: only current session's work_dir.
+    session=<dir_name>: only that session directory.
+    session="" (default, scope=all): all session work_dirs under user_root."""
     proc = await _proc_for_request(request)
     result = []
     _skip = {"hermes_home", "logs", "__pycache__"}
@@ -1266,11 +1302,18 @@ async def list_files(request: Request, scope: str = "all"):
             elif entry.is_dir():
                 _scan(entry, prefix + entry.name + "/")
 
-    if scope == "current":
+    if session == "current" or (not session and scope == "current"):
         work_dir = Path(proc.work_dir)
         if work_dir.is_dir():
             _scan(work_dir)
+    elif session:
+        # Specific session directory
+        user_root = Path(broker.work_root) / proc.user_id
+        target = user_root / session
+        if target.is_dir():
+            _scan(target, session + "/")
     else:
+        # All sessions
         user_root = Path(broker.work_root) / proc.user_id
         if user_root.is_dir():
             for entry in sorted(user_root.iterdir()):
@@ -1281,6 +1324,37 @@ async def list_files(request: Request, scope: str = "all"):
 
     logger.info(f"[{proc.user_id}] list_files: found {len(result)} files")
     return result
+
+
+@app.get("/api/workdirs")
+async def list_work_dirs(request: Request):
+    """List all work directories for the current user (JWT auth)."""
+    proc = await _proc_for_request(request)
+    user_root = Path(broker.work_root) / proc.user_id
+    _skip = {"hermes_home", "logs", "__pycache__", "uploads"}
+    dirs = []
+    if user_root.is_dir():
+        for entry in sorted(user_root.iterdir(), key=lambda d: d.stat().st_mtime, reverse=True):
+            if not entry.is_dir() or entry.name.startswith('.') or entry.name in _skip:
+                continue
+            try:
+                file_count = sum(1 for f in entry.iterdir()
+                                 if f.is_file() and not f.name.startswith('.'))
+                dir_count = sum(1 for f in entry.iterdir()
+                                if f.is_dir() and not f.name.startswith('.') and f.name not in _skip)
+            except PermissionError:
+                file_count = dir_count = 0
+            stat = entry.stat()
+            dirs.append({
+                "name": entry.name,
+                "file_count": file_count,
+                "dir_count": dir_count,
+                "mtime": stat.st_mtime,
+                "is_current": entry.name == Path(proc.work_dir).name,
+            })
+    return dirs
+
+
 async def proxy_download(file_path: str, request: Request):
     """Serve a file from current session's work_dir for download (JWT auth)."""
     proc = await _proc_for_request(request)
@@ -1293,11 +1367,14 @@ async def proxy_download(file_path: str, request: Request):
             raise HTTPException(status_code=403, detail="Access denied")
     except (ValueError, OSError):
         raise HTTPException(status_code=400, detail="Invalid path")
-    # Block sensitive directories
+    # Block sensitive directories, but allow screenshots cache
     _blocked = {"hermes_home", "logs"}
-    for part in fpath.relative_to(user_root.resolve()).parts:
-        if part.startswith('.') or part in _blocked:
-            raise HTTPException(status_code=403, detail="Access denied")
+    rel = fpath.relative_to(user_root.resolve())
+    parts = list(rel.parts)
+    if parts[:3] != ["hermes_home", "cache", "screenshots"]:
+        for part in parts:
+            if part.startswith('.') or part in _blocked:
+                raise HTTPException(status_code=403, detail="Access denied")
     if not fpath.is_file():
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(str(fpath), filename=fpath.name)
@@ -1319,11 +1396,18 @@ async def download_files(file_path: str, request: Request):
     except (ValueError, OSError):
         raise HTTPException(status_code=400, detail="Invalid path")
     _blocked = {"hermes_home", "logs"}
-    for part in fpath.relative_to(user_root.resolve()).parts:
-        if part.startswith('.') or part in _blocked:
-            raise HTTPException(status_code=403, detail="Access denied")
+    rel = fpath.relative_to(user_root.resolve())
+    parts = list(rel.parts)
+    if parts[:3] != ["hermes_home", "cache", "screenshots"]:
+        for part in parts:
+            if part.startswith('.') or part in _blocked:
+                raise HTTPException(status_code=403, detail="Access denied")
 
     if fpath.is_file():
+        # Serve image files inline so browsers display them instead of downloading
+        _img_ext = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'}
+        if fpath.suffix.lower() in _img_ext:
+            return FileResponse(str(fpath))
         return FileResponse(str(fpath), filename=fpath.name)
 
     if fpath.is_dir():
@@ -1343,6 +1427,51 @@ async def download_files(file_path: str, request: Request):
         )
 
     raise HTTPException(status_code=404, detail="Not found")
+
+
+@app.get("/api/screenshot")
+async def serve_screenshot(request: Request):
+    """Serve a MEDIA: file by absolute path (JWT auth).
+
+    The agent emits MEDIA:/absolute/path in responses. The frontend converts
+    these to /api/screenshot?path=<encoded>. This endpoint validates the path
+    is under the user's Hermes directory (cache, uploads, or work files).
+    """
+    from urllib.parse import unquote
+    abs_path = unquote(request.query_params.get("path", ""))
+    if not abs_path:
+        raise HTTPException(status_code=400, detail="Missing path")
+    proc = await _proc_for_request(request)
+    user_root = Path(broker.work_root) / proc.user_id
+
+    # Relative path → search in user directories (work_dir, cache, uploads)
+    if not Path(abs_path).is_absolute():
+        for candidate in [
+            Path(proc.work_dir) / abs_path,
+            user_root / "hermes_home" / "cache" / "screenshots" / abs_path,
+            user_root / "uploads" / abs_path,
+        ]:
+            if candidate.is_file():
+                abs_path = str(candidate)
+                break
+        else:
+            raise HTTPException(status_code=404, detail="Not found")
+
+    allowed_dirs = [
+        (user_root / "hermes_home" / "cache").resolve(),
+        (user_root / "uploads").resolve(),
+        # Also allow the work_dir itself for relative paths resolved above
+        Path(proc.work_dir).resolve(),
+    ]
+    try:
+        fpath = Path(abs_path).resolve()
+        if not any(str(fpath).startswith(str(d)) for d in allowed_dirs):
+            raise HTTPException(status_code=403, detail="Access denied")
+    except (ValueError, OSError):
+        raise HTTPException(status_code=400, detail="Invalid path")
+    if not fpath.is_file():
+        raise HTTPException(status_code=404, detail="Not found")
+    return FileResponse(str(fpath))
 
 
 @app.post("/api/skills/upload")
