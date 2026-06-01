@@ -298,6 +298,20 @@ body {
   font-size: 11px;
   white-space: nowrap;
 }
+.file-time-group {
+  margin-bottom: 4px;
+}
+.file-time-label {
+  padding: 4px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
 .file-dir-name {
   padding: 8px 16px 2px;
   font-size: 11px;
@@ -483,7 +497,9 @@ body {
 .msg.assistant .msg-body.md th { background: var(--bg); font-weight: 600; }
 .msg.assistant .msg-body.md a { color: var(--accent); text-decoration: none; }
 .msg.assistant .msg-body.md a:hover { text-decoration: underline; }
-.msg.assistant .msg-body.md img { max-width: 100%; border-radius: 8px; }
+.msg.assistant .msg-body.md img { max-width: 100%; border-radius: 8px; cursor: pointer; transition: opacity .15s; }
+.msg.assistant .msg-body.md img:hover { opacity: 0.85; }
+.msg.assistant .msg-body.md img[src*="screenshot"] { max-height: 480px; object-fit: contain; border: 1px solid var(--border); }
 .msg.assistant .msg-body.md hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
 .msg.assistant .msg-body.md code:not(pre code) { background: var(--code-bg); padding: 2px 6px; border-radius: 4px; font-size: 0.9em; font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; }
 .msg.assistant .msg-body.md pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 10px; margin: 0 0 12px 0; overflow-x: auto; position: relative; }
@@ -874,6 +890,7 @@ body {
   background: #fff; border-radius: 16px;
   box-shadow: 0 20px 60px rgba(0,0,0,0.2);
   max-width: 480px; width: calc(100% - 32px);
+  max-height: calc(100vh - 64px); overflow-y: auto;
   padding: 24px; animation: interactIn 0.15s ease-out;
 }
 @keyframes interactIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
@@ -1006,7 +1023,12 @@ body {
   <div class="files-panel" id="filesPanel">
     <div class="files-panel-header">
       <span>Files</span>
+      <select id="sessionDirSelect" onchange="onSessionDirChange(this.value)" style="flex:1;margin:0 6px;font-size:12px;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:1px 4px;max-width:160px;min-width:80px">
+        <option value="current">Current</option>
+        <option value="">All</option>
+      </select>
       <div style="display:flex;gap:4px;align-items:center">
+        <button onclick="refreshFilesList()" title="Refresh" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:14px;opacity:0.7;transition:opacity .15s" onmouseenter="this.style.opacity='1'" onmouseleave="this.style.opacity='0.7'">&#x21bb;</button>
         <button onclick="toggleFilesPanel()" style="background:none;border:none;color:var(--fg);cursor:pointer;font-size:18px">&times;</button>
       </div>
     </div>
@@ -1020,6 +1042,7 @@ body {
       <button class="snav-item" data-nav="usage" onclick="switchNav('usage')">Usage</button>
       <button class="snav-item" data-nav="skills" onclick="switchNav('skills')">Skills</button>
       <button class="snav-item" data-nav="cron" onclick="switchNav('cron')">Scheduled Tasks</button>
+      <button class="snav-item" data-nav="mcp" onclick="switchNav('mcp')">MCP Servers</button>
     </div>
     <div class="settings-content">
       <div class="settings-header">
@@ -1475,90 +1498,160 @@ function showClarifyUI(payload) {
   const { question, choices, request_id } = payload || {};
   if (!request_id) return;
 
-  let html = '<div class="interact-title">' + esc(question || 'Agent asks:') + '</div>';
-
-  if (choices && choices.length > 0) {
-    html += '<div class="interact-choices">';
-    for (let i = 0; i < choices.length; i++) {
-      html += '<button class="interact-choice-btn" onclick="_clarifyAnswer(\'' + esc(request_id) + '\', ' + JSON.stringify(JSON.stringify(choices[i])) + ')">' + esc(choices[i]) + '</button>';
-    }
-    html += '<button class="interact-choice-btn" style="color:var(--text-dim);font-style:italic" onclick="_clarifyOther(\'' + esc(request_id) + '\')">Other (type your answer)</button>';
-    html += '</div>';
-  } else {
-    html += '<input class="interact-input" id="clarifyInput" placeholder="Type your answer…" onkeydown="if(event.key===\'Enter\')_clarifyAnswer(\'' + esc(request_id) + '\', JSON.stringify(document.getElementById(\'clarifyInput\').value))">';
-    html += '<div class="interact-actions"><button class="btn-submit" onclick="_clarifyAnswer(\'' + esc(request_id) + '\', JSON.stringify(document.getElementById(\'clarifyInput\').value))">Send</button></div>';
-  }
-
   const overlay = document.createElement('div');
   overlay.id = 'interactOverlay';
   overlay.className = 'interact-overlay';
-  overlay.innerHTML = '<div class="interact-panel">' + html + '</div>';
+  const panel = document.createElement('div');
+  panel.className = 'interact-panel';
+  overlay.appendChild(panel);
   document.body.appendChild(overlay);
-  const firstInput = overlay.querySelector('input');
-  if (firstInput) firstInput.focus();
+
+  const title = document.createElement('div');
+  title.className = 'interact-title';
+  title.textContent = question || 'Agent asks:';
+  panel.appendChild(title);
+
+  if (choices && choices.length > 0) {
+    const choicesDiv = document.createElement('div');
+    choicesDiv.className = 'interact-choices';
+    for (let i = 0; i < choices.length; i++) {
+      const btn = document.createElement('button');
+      btn.className = 'interact-choice-btn';
+      btn.textContent = choices[i];
+      const choiceVal = choices[i];
+      btn.addEventListener('click', () => _clarifyAnswer(request_id, JSON.stringify(choiceVal)));
+      choicesDiv.appendChild(btn);
+    }
+    const otherBtn = document.createElement('button');
+    otherBtn.className = 'interact-choice-btn';
+    otherBtn.style.cssText = 'color:var(--text-dim);font-style:italic';
+    otherBtn.textContent = 'Other (type your answer)';
+    otherBtn.addEventListener('click', () => _clarifyOther(request_id));
+    choicesDiv.appendChild(otherBtn);
+    panel.appendChild(choicesDiv);
+  } else {
+    const input = document.createElement('input');
+    input.className = 'interact-input';
+    input.id = 'clarifyInput';
+    input.placeholder = 'Type your answer…';
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') _clarifyAnswer(request_id, JSON.stringify(input.value));
+    });
+    panel.appendChild(input);
+    const actions = document.createElement('div');
+    actions.className = 'interact-actions';
+    const sendBtn = document.createElement('button');
+    sendBtn.className = 'btn-submit';
+    sendBtn.textContent = 'Send';
+    sendBtn.addEventListener('click', () => _clarifyAnswer(request_id, JSON.stringify(input.value)));
+    actions.appendChild(sendBtn);
+    panel.appendChild(actions);
+    input.focus();
+  }
 }
 
 function _clarifyOther(requestId) {
   const panel = document.querySelector('#interactOverlay .interact-panel');
   if (!panel) return;
-  // Replace choices with input
-  let html = '<div class="interact-title">Type your answer:</div>';
-  html += '<input class="interact-input" id="clarifyInput" autofocus onkeydown="if(event.key===\'Enter\')_clarifyAnswer(\'' + esc(requestId) + '\', JSON.stringify(document.getElementById(\'clarifyInput\').value))">';
-  html += '<div class="interact-actions"><button class="btn-submit" onclick="_clarifyAnswer(\'' + esc(requestId) + '\', JSON.stringify(document.getElementById(\'clarifyInput\').value))">Send</button></div>';
-  panel.innerHTML = html;
-  document.getElementById('clarifyInput').focus();
+  panel.innerHTML = '';
+  const title = document.createElement('div');
+  title.className = 'interact-title';
+  title.textContent = 'Type your answer:';
+  panel.appendChild(title);
+  const input = document.createElement('input');
+  input.className = 'interact-input';
+  input.id = 'clarifyInput';
+  input.placeholder = 'Type your answer…';
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') _clarifyAnswer(requestId, JSON.stringify(input.value));
+  });
+  panel.appendChild(input);
+  const actions = document.createElement('div');
+  actions.className = 'interact-actions';
+  const sendBtn = document.createElement('button');
+  sendBtn.className = 'btn-submit';
+  sendBtn.textContent = 'Send';
+  sendBtn.addEventListener('click', () => _clarifyAnswer(requestId, JSON.stringify(input.value)));
+  actions.appendChild(sendBtn);
+  panel.appendChild(actions);
+  input.focus();
 }
 
 function _clarifyAnswer(requestId, answerJson) {
   const answer = JSON.parse(answerJson);
   _dismissInteract();
-  rpc('clarify.respond', { answer, request_id: requestId }).catch(() => {});
+  rpc('clarify.respond', { answer, request_id: requestId }).then(r => {
+    console.log('[clarify] respond ok:', JSON.stringify(r));
+  }).catch(e => {
+    console.error('[clarify] respond failed:', e);
+  });
 }
 
 function showApprovalUI(payload, evtSid) {
   _dismissInteract();
-  console.log('[approval] showApprovalUI called, evtSid=', evtSid, 'payload=', payload);
   const { command, description, pattern_key } = payload || {};
 
   // Store sid for the respond call — Hermes requires session_id
   window._approvalSid = evtSid || null;
 
   const cmd = command || '';
-  // Truncate long commands: show first 3 lines + line count
   let displayCmd = cmd;
   const lines = cmd.split('\n');
   if (lines.length > 3) {
     displayCmd = lines.slice(0, 3).join('\n') + `\n... (${lines.length} lines total)`;
   }
 
-  let html = '<div class="interact-title">Approve Command</div>';
-  if (description) {
-    html += '<div class="interact-desc">' + esc(description) + '</div>';
-  } else if (pattern_key === 'execute_code') {
-    html += '<div class="interact-desc">Execute code script requires approval</div>';
-  } else {
-    html += '<div class="interact-desc">Terminal command requires approval</div>';
-  }
-  html += '<div class="interact-cmd">' + esc(displayCmd) + '</div>';
-  html += '<div class="interact-choices">';
-  html += '<button class="interact-choice-btn primary" onclick="_approvalChoice(\'once\')">Allow once</button>';
-  html += '<button class="interact-choice-btn" onclick="_approvalChoice(\'session\')">Allow for this session</button>';
-  html += '<button class="interact-choice-btn" onclick="_approvalChoice(\'always\')">Always allow</button>';
-  html += '<button class="interact-choice-btn danger" onclick="_approvalChoice(\'deny\')">Deny</button>';
-  html += '</div>';
-
   const overlay = document.createElement('div');
   overlay.id = 'interactOverlay';
   overlay.className = 'interact-overlay';
-  overlay.innerHTML = '<div class="interact-panel">' + html + '</div>';
+  const panel = document.createElement('div');
+  panel.className = 'interact-panel';
+  overlay.appendChild(panel);
   document.body.appendChild(overlay);
+
+  const title = document.createElement('div');
+  title.className = 'interact-title';
+  title.textContent = 'Approve Command';
+  panel.appendChild(title);
+
+  const desc = document.createElement('div');
+  desc.className = 'interact-desc';
+  if (description) {
+    desc.textContent = description;
+  } else if (pattern_key === 'execute_code') {
+    desc.textContent = 'Execute code script requires approval';
+  } else {
+    desc.textContent = 'Terminal command requires approval';
+  }
+  panel.appendChild(desc);
+
+  const cmdEl = document.createElement('div');
+  cmdEl.className = 'interact-cmd';
+  cmdEl.textContent = displayCmd;
+  panel.appendChild(cmdEl);
+
+  const choicesDiv = document.createElement('div');
+  choicesDiv.className = 'interact-choices';
+  const approvalOptions = [
+    { label: 'Allow once', cls: 'primary', choice: 'once' },
+    { label: 'Allow for this session', cls: '', choice: 'session' },
+    { label: 'Always allow', cls: '', choice: 'always' },
+    { label: 'Deny', cls: 'danger', choice: 'deny' },
+  ];
+  for (const opt of approvalOptions) {
+    const btn = document.createElement('button');
+    btn.className = 'interact-choice-btn' + (opt.cls ? ' ' + opt.cls : '');
+    btn.textContent = opt.label;
+    btn.addEventListener('click', () => _approvalChoice(opt.choice));
+    choicesDiv.appendChild(btn);
+  }
+  panel.appendChild(choicesDiv);
 }
 
 function _approvalChoice(choice) {
   _dismissInteract();
   const params = { choice };
   if (window._approvalSid) params.session_id = window._approvalSid;
-  console.log('[approval] responding:', JSON.stringify(params));
   rpc('approval.respond', params).then(r => {
     console.log('[approval] response:', JSON.stringify(r));
   }).catch(e => {
@@ -1571,17 +1664,49 @@ function showSudoUI(payload) {
   const { request_id } = payload || {};
   if (!request_id) return;
 
-  let html = '<div class="interact-title">Sudo Password Required</div>';
-  html += '<div class="interact-desc">The agent needs sudo privileges.</div>';
-  html += '<input class="interact-input" id="sudoInput" type="password" placeholder="Enter password…" onkeydown="if(event.key===\'Enter\')_sudoSubmit(\'' + esc(request_id) + '\')">';
-  html += '<div class="interact-actions"><button class="btn-cancel" onclick="_dismissInteract()">Cancel</button><button class="btn-submit" onclick="_sudoSubmit(\'' + esc(request_id) + '\')">Submit</button></div>';
-
   const overlay = document.createElement('div');
   overlay.id = 'interactOverlay';
   overlay.className = 'interact-overlay';
-  overlay.innerHTML = '<div class="interact-panel">' + html + '</div>';
+  const panel = document.createElement('div');
+  panel.className = 'interact-panel';
+  overlay.appendChild(panel);
   document.body.appendChild(overlay);
-  document.getElementById('sudoInput').focus();
+
+  const title = document.createElement('div');
+  title.className = 'interact-title';
+  title.textContent = 'Sudo Password Required';
+  panel.appendChild(title);
+
+  const desc = document.createElement('div');
+  desc.className = 'interact-desc';
+  desc.textContent = 'The agent needs sudo privileges.';
+  panel.appendChild(desc);
+
+  const input = document.createElement('input');
+  input.className = 'interact-input';
+  input.id = 'sudoInput';
+  input.type = 'password';
+  input.placeholder = 'Enter password…';
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') _sudoSubmit(request_id);
+  });
+  panel.appendChild(input);
+
+  const actions = document.createElement('div');
+  actions.className = 'interact-actions';
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'btn-cancel';
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.addEventListener('click', () => _dismissInteract());
+  actions.appendChild(cancelBtn);
+  const submitBtn = document.createElement('button');
+  submitBtn.className = 'btn-submit';
+  submitBtn.textContent = 'Submit';
+  submitBtn.addEventListener('click', () => _sudoSubmit(request_id));
+  actions.appendChild(submitBtn);
+  panel.appendChild(actions);
+
+  input.focus();
 }
 
 function _sudoSubmit(requestId) {
@@ -1596,17 +1721,51 @@ function showSecretUI(payload) {
   const { prompt, env_var, request_id } = payload || {};
   if (!request_id) return;
 
-  let html = '<div class="interact-title">' + esc(prompt || 'Secret Required') + '</div>';
-  if (env_var) html += '<div class="interact-desc">Environment variable: <code>' + esc(env_var) + '</code></div>';
-  html += '<input class="interact-input" id="secretInput" type="password" placeholder="Enter value…" onkeydown="if(event.key===\'Enter\')_secretSubmit(\'' + esc(request_id) + '\')">';
-  html += '<div class="interact-actions"><button class="btn-cancel" onclick="_secretSkip(\'' + esc(request_id) + '\')">Skip</button><button class="btn-submit" onclick="_secretSubmit(\'' + esc(request_id) + '\')">Submit</button></div>';
-
   const overlay = document.createElement('div');
   overlay.id = 'interactOverlay';
   overlay.className = 'interact-overlay';
-  overlay.innerHTML = '<div class="interact-panel">' + html + '</div>';
+  const panel = document.createElement('div');
+  panel.className = 'interact-panel';
+  overlay.appendChild(panel);
   document.body.appendChild(overlay);
-  document.getElementById('secretInput').focus();
+
+  const title = document.createElement('div');
+  title.className = 'interact-title';
+  title.textContent = prompt || 'Secret Required';
+  panel.appendChild(title);
+
+  if (env_var) {
+    const desc = document.createElement('div');
+    desc.className = 'interact-desc';
+    desc.innerHTML = 'Environment variable: <code>' + esc(env_var) + '</code>';
+    panel.appendChild(desc);
+  }
+
+  const input = document.createElement('input');
+  input.className = 'interact-input';
+  input.id = 'secretInput';
+  input.type = 'password';
+  input.placeholder = 'Enter value…';
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') _secretSubmit(request_id);
+  });
+  panel.appendChild(input);
+
+  const actions = document.createElement('div');
+  actions.className = 'interact-actions';
+  const skipBtn = document.createElement('button');
+  skipBtn.className = 'btn-cancel';
+  skipBtn.textContent = 'Skip';
+  skipBtn.addEventListener('click', () => _secretSkip(request_id));
+  actions.appendChild(skipBtn);
+  const submitBtn = document.createElement('button');
+  submitBtn.className = 'btn-submit';
+  submitBtn.textContent = 'Submit';
+  submitBtn.addEventListener('click', () => _secretSubmit(request_id));
+  actions.appendChild(submitBtn);
+  panel.appendChild(actions);
+
+  input.focus();
 }
 
 function _secretSubmit(requestId) {
@@ -1626,7 +1785,12 @@ function _secretSkip(requestId) {
 async function hermesHTTP(method, path, body) {
   if (!brokerInfo) throw new Error('Not connected');
   const opts = { method, credentials: 'include' };
-  if (body) { opts.headers = { 'Content-Type': 'application/json' }; opts.body = JSON.stringify(body); }
+  if (!opts.headers) opts.headers = {};
+  // In username mode (no JWT), send user_id so broker can route to correct process
+  if (!_oauthMode && _currentUid) {
+    opts.headers['X-User-ID'] = _currentUid;
+  }
+  if (body) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
   const resp = await fetch(path, opts);
   if (!resp.ok) throw new Error('HTTP ' + resp.status);
   const text = await resp.text();
@@ -1836,7 +2000,6 @@ async function switchConversation(convId) {
 
   conv.hermesSid && !isConvStreaming(convId) ? enableInput() : disableInput();
   fetchUsage(convId);
-  if (filesPanelOpen) refreshFilesList();
 }
 
 async function deleteConversation(convId, event) {
@@ -2350,6 +2513,20 @@ if (_mdReady) {
 }
 
 function renderMd(text) {
+  if (!text) return '';
+  // Replace MEDIA:/absolute/path with <img> or <a> tags (before markdown parsing)
+  const mediaRe = /MEDIA:(\S+)/gi;
+  text = text.replace(mediaRe, (_, rawPath) => {
+    // Strip trailing punctuation that markdown might include
+    const path = rawPath.replace(/[,;:)}\]>`'"]+$/, '');
+    const name = path.split('/').pop();
+    const url = '/api/screenshot?path=' + encodeURIComponent(path);
+    const imgExt = /\.(?:png|jpe?g|gif|webp|bmp|svg)$/i;
+    if (imgExt.test(path)) {
+      return `\n![${esc(name)}](${url})\n`;
+    }
+    return `[📎 ${esc(name)}](${url})`;
+  });
   if (!_mdReady) return esc(text);
   try { return marked.parse(text); } catch(e) { return esc(text); }
 }
@@ -2367,12 +2544,18 @@ function addCodeCopyBtns(container) {
     pre.style.position = 'relative';
     pre.appendChild(btn);
   });
+  // Make images in assistant messages clickable (open full-size in new tab)
+  container.querySelectorAll('img').forEach(img => {
+    if (img.dataset.lightboxBound) return;
+    img.dataset.lightboxBound = '1';
+    img.addEventListener('click', () => window.open(img.src, '_blank'));
+  });
 }
 
 // ── Settings (nav + content overlay) ──
 
 let _settingsNav = 'model';
-const _navTitles = { model: 'Model', usage: 'Usage', skills: 'Skills', cron: 'Scheduled Tasks' };
+const _navTitles = { model: 'Model', usage: 'Usage', skills: 'Skills', cron: 'Scheduled Tasks', mcp: 'MCP Servers' };
 
 function openSettings() {
   $('settingsCol').style.display = '';
@@ -2409,11 +2592,41 @@ function toggleFilesPanel() {
   const panel = $('filesPanel');
   filesPanelOpen = !filesPanelOpen;
   panel.classList.toggle('open', filesPanelOpen);
-  if (filesPanelOpen) renderConvFiles();
+  if (filesPanelOpen) {
+    const sel = $('sessionDirSelect');
+    sel.value = 'current';
+    _allFiles = null;
+    loadSessionDirs();
+    renderConvFiles();
+  }
+}
+
+function loadSessionDirs() {
+  fetch('/api/workdirs', { credentials: 'include' })
+    .then(r => r.json())
+    .then(dirs => {
+      const sel = $('sessionDirSelect');
+      sel.innerHTML = '<option value="current">Current</option><option value="">All</option>';
+      dirs.forEach(d => {
+        const label = d.name.slice(0, 12) + '\u2026' + (d.is_current ? ' \u2605' : '') + ' (' + (d.file_count + d.dir_count) + ')';
+        const opt = document.createElement('option');
+        opt.value = d.name;
+        opt.textContent = label;
+        sel.appendChild(opt);
+      });
+    })
+    .catch(() => {});
+}
+
+function onSessionDirChange() {
+  _allFiles = null;
+  renderConvFiles();
 }
 
 function refreshFilesList() {
-  fetch('/api/files', { credentials: 'include' })
+  const session = $('sessionDirSelect')?.value || 'current';
+  const url = '/api/files?session=' + encodeURIComponent(session);
+  fetch(url, { credentials: 'include' })
     .then(r => r.json())
     .then(files => {
       _allFiles = files;
@@ -2424,10 +2637,16 @@ function refreshFilesList() {
 
 function renderConvFiles() {
   const body = $('filesPanelBody');
+  const session = $('sessionDirSelect')?.value || 'current';
   if (_allFiles && _allFiles.length > 0) {
-    body.innerHTML = buildTree(_allFiles);
+    const files = (session && session !== '') ? _allFiles.map(f => ({
+      ...f,
+      path: f.path.replace(/^[^/]+\//, ''),
+    })) : _allFiles;
+    body.innerHTML = buildTimeGroups(files);
   } else {
-    fetch('/api/files', { credentials: 'include' })
+    const url = '/api/files?session=' + encodeURIComponent(session);
+    fetch(url, { credentials: 'include' })
       .then(r => r.json())
       .then(files => {
         _allFiles = files;
@@ -2435,12 +2654,44 @@ function renderConvFiles() {
           body.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:13px">No files yet</div>';
           return;
         }
-        body.innerHTML = buildTree(files);
+        body.innerHTML = buildTimeGroups(files);
       })
       .catch(() => {
         body.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:13px">No files yet</div>';
       });
   }
+}
+
+function buildTimeGroups(files) {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const yesterday = new Date(today - 86400000);
+  const weekAgo = new Date(today - 7 * 86400000);
+
+  const groups = {};
+  files.forEach(f => {
+    const mtime = f.mtime ? f.mtime * 1000 : 0;
+    const d = new Date(mtime);
+    let label;
+    if (d >= today) label = 'Today';
+    else if (d >= yesterday) label = 'Yesterday';
+    else if (d >= weekAgo) label = 'This week';
+    else label = 'Earlier';
+    if (!groups[label]) groups[label] = [];
+    groups[label].push(f);
+  });
+
+  const order = ['Today', 'Yesterday', 'This week', 'Earlier'];
+  let html = '';
+  order.forEach(label => {
+    const g = groups[label];
+    if (!g) return;
+    const sorted = g.sort((a, b) => (b.mtime || 0) - (a.mtime || 0));
+    html += `<div class="file-time-group">
+      <div class="file-time-label">${esc(label)}</div>
+      ${buildTree(sorted)}</div>`;
+  });
+  return html || '<div style="padding:16px;color:var(--muted);font-size:13px">No files yet</div>';
 }
 
 function buildTree(files) {
@@ -2498,7 +2749,11 @@ function renderNode(node, indent, prefix) {
     const time = f.mtime ? new Date(f.mtime * 1000).toLocaleTimeString() : '';
     const encPath = f.path.split('/').map(encodeURIComponent).join('/');
     const pad = indent ? 'padding-left:' + (indent + 8) + 'px' : 'padding-left:16px';
-    html += `<div class="file-item" style="${pad}" onclick="downloadFile('${encPath}','${esc(f.leafName || f.name)}')">
+    const isImg = /\.(?:png|jpe?g|gif|webp|bmp|svg)$/i.test(f.leafName || f.name);
+    const clickFn = isImg
+      ? `window.open('${esc(f.leafName || f.name)}','_blank').location='/api/files/download/${encPath}'`
+      : `downloadFile('${encPath}','${esc(f.leafName || f.name)}')`;
+    html += `<div class="file-item" style="${pad}" onclick="${clickFn}">
       <span class="file-item-name" title="${esc(f.path)}">${esc(f.leafName || f.name)}</span>
       <span class="file-item-meta">${size}${size && time ? ' &middot; ' : ''}${time}</span>
     </div>`;
@@ -2517,6 +2772,7 @@ function switchNav(section) {
   else if (section === 'usage') loadSettingsUsage();
   else if (section === 'skills') loadSettingsSkills();
   else if (section === 'cron') loadSettingsCron();
+  else if (section === 'mcp') loadSettingsMcp();
 }
 
 async function loadSettingsModel() {
@@ -2893,6 +3149,262 @@ async function addCustomModel() {
   }
 }
 
+// ── MCP Servers ──
+
+function _mcpItemHtml(name, s, canRemove) {
+  const envKeys = Object.keys(s.env || {});
+  return `<div class="skill-item">
+    <div class="skill-info" style="cursor:pointer" onclick="showMcpDetail('${esc(name).replace(/'/g, "\\'")}')">
+      <div class="skill-name">${esc(name)}</div>
+      <div class="skill-desc"><code>${esc(s.command || '')}</code></div>
+      ${envKeys.length ? '<div style="font-size:10px;color:var(--text-dim);margin-top:1px">env: ' + envKeys.map(k => '<code>' + esc(k) + '</code>').join(', ') + '</div>' : ''}
+    </div>
+    ${canRemove ? '<button class="cron-btn" style="border-color:var(--danger);color:var(--danger);font-size:11px;padding:2px 8px" onclick="removeMcpServer(\'' + esc(name).replace(/'/g, "\\'") + '\')" title="Remove server">\u2715</button>' : ''}
+  </div>`;
+}
+
+async function loadSettingsMcp() {
+  const body = $('settingsBody');
+  try {
+    const cfg = await hermesHTTP('GET', '/api/config');
+    const servers = cfg.mcp_servers || {};
+    const BUNDLED_MCPS = [
+      { name: 'linear', desc: 'Find, create, and update Linear issues, projects, and comments' },
+      { name: 'n8n', desc: 'Manage and inspect n8n workflows' },
+    ];
+    const names = Object.keys(servers).sort();
+    const userNames = names.filter(n => !BUNDLED_MCPS.some(b => b.name === n));
+    const sysEnabledCount = BUNDLED_MCPS.filter(b => servers[b.name]).length;
+
+    let html = '';
+
+    // Tab bar
+    html += '<div class="skill-tabs">';
+    html += '<button class="skill-tab active" onclick="switchMcpTab(\'system\',this)">System (' + sysEnabledCount + '/' + BUNDLED_MCPS.length + ')</button>';
+    html += '<button class="skill-tab" onclick="switchMcpTab(\'user\',this)">My Servers (' + userNames.length + ')</button>';
+    html += '</div>';
+
+    // Tab: System
+    html += '<div class="skill-tab-panel active" id="mcpPanelSystem">';
+    html += '<div class="s-card"><div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">Bundled with Hermes, approved by Nous</div>';
+    for (const b of BUNDLED_MCPS) {
+      const s = servers[b.name];
+      const enabled = !!s;
+      html += `<div class="skill-item" ${!enabled ? 'style="opacity:0.6"' : ''}>
+        <div class="skill-info" ${enabled ? 'style="cursor:pointer" onclick="showMcpDetail(\'' + esc(b.name) + '\')"' : ''}><div class="skill-name">${esc(b.name)} <span style="font-size:10px;color:var(--text-dim);background:var(--bg);padding:1px 6px;border-radius:4px">system</span></div><div class="skill-desc">${esc(b.desc)}</div></div>
+        <label class="toggle"><input type="checkbox" ${enabled ? 'checked' : ''} onchange="toggleMcpServer('${esc(b.name)}',this.checked,${!enabled})"><span class="toggle-slider"></span></label>
+      </div>`;
+    }
+    html += '</div></div>';
+
+    // Tab: User
+    html += '<div class="skill-tab-panel" id="mcpPanelUser">';
+    html += '<div class="s-card"><div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">Added by you</div>';
+    if (userNames.length === 0) {
+      html += '<div class="s-empty">No user-installed MCP servers yet</div>';
+    } else {
+      for (const name of userNames) {
+        const s = servers[name];
+        const envKeys = Object.keys(s.env || {});
+        html += `<div class="skill-item">
+          <div class="skill-info" style="cursor:pointer" onclick="showMcpDetail('${esc(name).replace(/'/g, "\\'")}')">
+            <div class="skill-name">${esc(name)}</div>
+            <div class="skill-desc"><code>${esc(s.command || '')}</code></div>
+            ${envKeys.length ? '<div style="font-size:10px;color:var(--text-dim);margin-top:1px">env: ' + envKeys.map(k => '<code>' + esc(k) + '</code>').join(', ') + '</div>' : ''}
+          </div>
+          <label class="toggle"><input type="checkbox" checked onchange="toggleMcpServer('${esc(name).replace(/'/g, "\\'")}',this.checked,false)"><span class="toggle-slider"></span></label>
+        </div>`;
+      }
+    }
+    html += '</div></div>';
+
+    // Add form
+    html += `<div class="s-card">
+      <div class="s-card-title" style="cursor:pointer;display:flex;align-items:center;justify-content:space-between" onclick="toggleMcpForm()">
+        <span>Add MCP Server</span>
+        <span id="mcpToggleIcon" style="font-size:16px;transition:transform .2s">&#9654;</span>
+      </div>
+      <div id="mcpForm" style="display:none;margin-top:8px">
+        <div style="margin-bottom:8px">
+          <label style="font-size:11px;color:var(--text-dim);display:block;margin-bottom:3px">Server Name</label>
+          <input id="mcpName" class="s-input" placeholder="e.g. fetch">
+        </div>
+        <div style="margin-bottom:8px">
+          <label style="font-size:11px;color:var(--text-dim);display:block;margin-bottom:3px">Command</label>
+          <input id="mcpCommand" class="s-input" placeholder="e.g. uvx or npx">
+        </div>
+        <div style="margin-bottom:8px">
+          <label style="font-size:11px;color:var(--text-dim);display:block;margin-bottom:3px">Arguments (JSON array)</label>
+          <input id="mcpArgs" class="s-input" placeholder='e.g. ["mcp-server-fetch"]'>
+        </div>
+        <div style="margin-bottom:8px">
+          <label style="font-size:11px;color:var(--text-dim);display:block;margin-bottom:3px">Environment Variables (KEY=value, one per line)</label>
+          <textarea id="mcpEnv" class="s-input" rows="3" style="resize:vertical" placeholder="API_KEY=sk-...
+BASE_URL=https://example.com"></textarea>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:10px">
+          <button class="btn btn-primary" style="flex:1" onclick="addMcpServer()">Add Server</button>
+          <button class="btn" style="flex:1" onclick="toggleMcpForm()">Cancel</button>
+        </div>
+        <div id="mcpMsg" style="margin-top:8px;font-size:12px;display:none"></div>
+      </div>
+    </div>`;
+
+    body.innerHTML = html;
+  } catch(e) {
+    body.innerHTML = '<div style="color:var(--danger);padding:20px">Load failed: ' + esc(e.message) + '</div>';
+  }
+}
+
+function toggleMcpForm() {
+  const form = $('mcpForm');
+  const icon = $('mcpToggleIcon');
+  if (!form) return;
+  const open = form.style.display !== 'none';
+  form.style.display = open ? 'none' : 'block';
+  if (icon) icon.style.transform = open ? '' : 'rotate(90deg)';
+}
+
+async function addMcpServer() {
+  const name = $('mcpName')?.value?.trim();
+  const command = $('mcpCommand')?.value?.trim();
+  const argsStr = $('mcpArgs')?.value?.trim() || '[]';
+  const envStr = $('mcpEnv')?.value?.trim() || '';
+  const msg = $('mcpMsg');
+
+  if (!name || !command) {
+    if (msg) { msg.style.display = 'block'; msg.style.color = 'var(--danger)'; msg.textContent = 'Server Name and Command are required.'; }
+    return;
+  }
+
+  let args;
+  try { args = JSON.parse(argsStr); } catch(e) {
+    if (msg) { msg.style.display = 'block'; msg.style.color = 'var(--danger)'; msg.textContent = 'Arguments must be valid JSON array.'; }
+    return;
+  }
+
+  if (msg) { msg.style.display = 'block'; msg.style.color = 'var(--text-dim)'; msg.textContent = 'Saving\u2026'; }
+
+  try {
+    const cfg = await hermesHTTP('GET', '/api/config');
+    if (!cfg.mcp_servers) cfg.mcp_servers = {};
+
+    const entry = { command, args };
+    if (typeof args === 'string') entry.args = args; else entry.args = JSON.stringify(args);
+
+    // Parse env vars
+    const env = {};
+    for (const line of envStr.split('\n')) {
+      const [k, ...v] = line.split('=');
+      if (k.trim()) env[k.trim()] = v.join('=').trim();
+    }
+    if (Object.keys(env).length > 0) entry.env = env;
+
+    cfg.mcp_servers[name] = entry;
+    await hermesHTTP('PUT', '/api/config', { config: cfg });
+
+    if (msg) { msg.style.color = 'var(--success)'; msg.textContent = 'MCP server "' + name + '" saved. Restart session to apply.'; }
+    addSystemMsg('MCP server "' + name + '" added successfully');
+
+    setTimeout(() => loadSettingsMcp(), 500);
+  } catch (e) {
+    if (msg) { msg.style.color = 'var(--danger)'; msg.textContent = 'Failed: ' + e.message; }
+    addSystemMsg('Add MCP server failed: ' + e.message);
+  }
+}
+
+async function toggleMcpServer(name, enabled, isSystem) {
+  try {
+    const cfg = await hermesHTTP('GET', '/api/config');
+    if (!cfg.mcp_servers) cfg.mcp_servers = {};
+    if (enabled) {
+      // System server defaults
+      const defaults = {
+        linear: { transport: 'http', url: 'https://mcp.linear.app/mcp' },
+        n8n: { transport: 'stdio', command: 'python3', args: '[]' },
+      };
+      if (isSystem && defaults[name]) {
+        cfg.mcp_servers[name] = defaults[name];
+      }
+      addSystemMsg('MCP server "' + name + '" enabled. Restart session to apply.');
+    } else {
+      delete cfg.mcp_servers[name];
+      addSystemMsg('MCP server "' + name + '" disabled.');
+    }
+    await hermesHTTP('PUT', '/api/config', { config: cfg });
+    loadSettingsMcp();
+  } catch (e) {
+    addSystemMsg('Toggle failed: ' + e.message);
+  }
+}
+
+async function showMcpDetail(name) {
+  const modal = $('skillDetailModal');
+  if (!modal) return;
+  modal.innerHTML = '<div class="skill-detail" onclick="if(event.target===this)this.remove()"><div class="skill-detail-card" style="position:relative"><div style="text-align:center;padding:30px;color:var(--text-dim)">Loading...</div></div></div>';
+  try {
+    const cfg = await hermesHTTP('GET', '/api/config');
+    const s = (cfg.mcp_servers || {})[name] || {};
+    const args = typeof s.args === 'string' ? s.args : JSON.stringify(s.args || []);
+    const envKeys = Object.keys(s.env || {});
+    const envStr = envKeys.map(k => k + '=' + (s.env[k] || '')).join('\n');
+
+    let html = '<div class="skill-detail" onclick="if(event.target===this)this.remove()"><div class="skill-detail-card" style="position:relative">';
+    html += '<button class="sd-close" onclick="this.closest(\'.skill-detail\').remove()">\u2715</button>';
+    html += '<h2>' + esc(name) + '</h2>';
+    html += '<div class="sd-section"><div class="sd-label">Command</div>';
+    html += '<input id="mcpEditCommand" class="s-input" style="width:100%;box-sizing:border-box" value="' + esc(s.command || '') + '" placeholder="e.g. uvx or npx"></div>';
+    html += '<div class="sd-section"><div class="sd-label">Arguments (JSON array)</div>';
+    html += '<textarea id="mcpEditArgs" class="s-input" rows="3" style="resize:vertical;width:100%;box-sizing:border-box">' + esc(args) + '</textarea></div>';
+    html += '<div class="sd-section"><div class="sd-label">Environment Variables</div>';
+    html += '<textarea id="mcpEditEnv" class="s-input" rows="4" style="resize:vertical;width:100%;box-sizing:border-box">' + esc(envStr) + '</textarea></div>';
+    html += '<div id="mcpEditMsg" style="font-size:12px;display:none;margin-top:8px"></div>';
+    html += '<div class="sd-actions"><button class="btn btn-primary" onclick="saveMcpDetail(\'' + esc(name).replace(/'/g, "\\'") + '\')">Save</button>';
+    html += '<button class="btn" onclick="this.closest(\'.skill-detail\').remove()">Close</button></div>';
+    html += '</div></div>';
+    modal.innerHTML = html;
+  } catch (e) {
+    modal.innerHTML = '<div class="skill-detail" onclick="if(event.target===this)this.remove()"><div class="skill-detail-card"><div style="color:var(--danger);padding:20px">Failed: ' + esc(e.message) + '</div><button class="btn" onclick="this.closest(\'.skill-detail\').remove()">Close</button></div></div>';
+  }
+}
+
+async function saveMcpDetail(name) {
+  const command = $('mcpEditCommand')?.value?.trim();
+  const argsStr = $('mcpEditArgs')?.value?.trim() || '[]';
+  const envStr = $('mcpEditEnv')?.value?.trim() || '';
+  const msg = $('mcpEditMsg');
+
+  if (!command) {
+    if (msg) { msg.style.display = 'block'; msg.style.color = 'var(--danger)'; msg.textContent = 'Command is required.'; }
+    return;
+  }
+  let args;
+  try { args = JSON.parse(argsStr); } catch(e) {
+    if (msg) { msg.style.display = 'block'; msg.style.color = 'var(--danger)'; msg.textContent = 'Arguments must be valid JSON.'; }
+    return;
+  }
+
+  try {
+    const cfg = await hermesHTTP('GET', '/api/config');
+    if (!cfg.mcp_servers) cfg.mcp_servers = {};
+    const entry = { command, args: JSON.stringify(args) };
+    const env = {};
+    for (const line of envStr.split('\n')) {
+      const [k, ...v] = line.split('=');
+      if (k.trim()) env[k.trim()] = v.join('=').trim();
+    }
+    if (Object.keys(env).length > 0) entry.env = env;
+    cfg.mcp_servers[name] = entry;
+    await hermesHTTP('PUT', '/api/config', { config: cfg });
+    addSystemMsg('MCP server "' + name + '" updated.');
+    loadSettingsMcp();
+    const detail = document.querySelector('.skill-detail');
+    if (detail) detail.remove();
+  } catch (e) {
+    if (msg) { msg.style.color = 'var(--danger)'; msg.textContent = 'Failed: ' + e.message; }
+  }
+}
+
 async function toggleSkill(name, enabled) {
   try {
     await hermesHTTP('PUT', '/api/skills/toggle', { name, enabled });
@@ -2906,6 +3418,15 @@ function switchSkillTab(tabId, btn) {
   document.querySelectorAll('.skill-tab-panel').forEach(p => p.classList.remove('active'));
   btn.classList.add('active');
   const map = { system: 'skillPanelSystem', user: 'skillPanelUser' };
+  const panel = document.getElementById(map[tabId]);
+  if (panel) panel.classList.add('active');
+}
+
+function switchMcpTab(tabId, btn) {
+  document.querySelectorAll('#settingsBody .skill-tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('#settingsBody .skill-tab-panel').forEach(p => p.classList.remove('active'));
+  btn.classList.add('active');
+  const map = { system: 'mcpPanelSystem', user: 'mcpPanelUser' };
   const panel = document.getElementById(map[tabId]);
   if (panel) panel.classList.add('active');
 }
