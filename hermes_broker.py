@@ -1305,7 +1305,7 @@ async def list_files(request: Request, scope: str = "all", session: str = ""):
     if session == "current" or (not session and scope == "current"):
         work_dir = Path(proc.work_dir)
         if work_dir.is_dir():
-            _scan(work_dir)
+            _scan(work_dir, work_dir.name + "/")
     elif session:
         # Specific session directory
         user_root = Path(broker.work_root) / proc.user_id

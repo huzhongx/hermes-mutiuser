@@ -1017,6 +1017,7 @@ body {
         <textarea id="input" placeholder="Type a message…" rows="1" disabled></textarea>
       </div>
       <button class="btn-icon" id="undoBtn" onclick="undoLastTurn()" disabled title="Undo last turn">&#8617;</button>
+      <button class="btn-icon" id="stopBtn" onclick="stopTask()" disabled title="Stop" style="display:none">&#9632;</button>
       <button class="btn-icon send" id="sendBtn" onclick="sendMessage()" disabled title="Send">&#10148;</button>
     </div>
   </div>
@@ -1273,7 +1274,7 @@ function handleWS(data, initResolve) {
           }
         }
         streamState[convId] = { streamText: '' };
-        if (convId === activeConvId) showStreamingUI();
+        if (convId === activeConvId) { showStreamingUI(); updateStopBtn(); }
       }
       return;
     }
@@ -1329,9 +1330,16 @@ function handleWS(data, initResolve) {
         const chainArrow = document.querySelector('#toolChain-' + convId + ' .tool-chain-arrow');
         if (chainArrow) chainArrow.classList.remove('open');
         enableInput();
+        if (convId === activeConvId) updateStopBtn();
         if (conv && !conv.sessionKey) fetchSessionKey(conv.id);
         if (conv?.hermesSid) fetchUsage(conv.id);
       }
+      return;
+    }
+
+    if (t === 'review.summary') {
+      const text = data.params?.payload?.text || '';
+      if (text) addSystemMsg(text);
       return;
     }
 
@@ -2199,6 +2207,25 @@ function _fmtSize(bytes) {
 
 // ── Send message ──
 
+function updateStopBtn() {
+  const stopBtn = $('stopBtn');
+  const sendBtn = $('sendBtn');
+  if (!stopBtn || !sendBtn) return;
+  const busy = _sending || (activeConvId && !!streamState[activeConvId]);
+  stopBtn.style.display = busy ? '' : 'none';
+  stopBtn.disabled = !busy;
+  sendBtn.disabled = busy;
+}
+
+async function stopTask() {
+  if (!ws || ws.readyState !== WebSocket.OPEN || !activeConvId) return;
+  const conv = conversations[activeConvId];
+  if (!conv?.hermesSid) return;
+  try {
+    await rpc('session.interrupt', { session_id: conv.hermesSid });
+  } catch (e) { /* ignore */ }
+}
+
 async function sendMessage() {
   const el = $('input');
   const text = el.value.trim();
@@ -2209,6 +2236,7 @@ async function sendMessage() {
 
   // Acquire send lock
   _sending = true;
+  updateStopBtn();
   try {
 
   // Auto-compress when history grows large
@@ -2249,7 +2277,7 @@ async function sendMessage() {
     }
   } catch (e) { addSystemMsg('Send failed: ' + e.message); enableInput(); }
 
-  } finally { _sending = false; }
+  } finally { _sending = false; updateStopBtn(); }
 }
 
 // ── Rendering ──
@@ -2581,7 +2609,7 @@ function downloadFile(path, name) {
 
 function downloadFolder(dirPath) {
   const a = document.createElement('a');
-  a.href = '/api/files/download/' + dirPath.split('/').map(encodeURIComponent).join('/');
+  a.href = '/api/files/download/' + dirPath;
   a.download = dirPath.split('/').pop() + '.zip';
   document.body.appendChild(a);
   a.click();
@@ -2635,11 +2663,20 @@ function refreshFilesList() {
     .catch(() => {});
 }
 
+function _originalPath(displayPath) {
+  if (!_allFiles) return displayPath;
+  for (const f of _allFiles) {
+    if (f.path.endsWith(displayPath)) return f.path;
+  }
+  return displayPath;
+}
+
 function renderConvFiles() {
   const body = $('filesPanelBody');
   const session = $('sessionDirSelect')?.value || 'current';
   if (_allFiles && _allFiles.length > 0) {
-    const files = (session && session !== '') ? _allFiles.map(f => ({
+    const isUuid = session && session.length > 10;
+    const files = isUuid ? _allFiles.map(f => ({
       ...f,
       path: f.path.replace(/^[^/]+\//, ''),
     })) : _allFiles;
@@ -2735,7 +2772,7 @@ function renderNode(node, indent, prefix) {
         <span class="file-dir-icon">&#128193;</span>
         <span class="file-dir-label">${esc(dir)}</span>
         <span class="file-dir-count">${count}</span>
-        <span class="file-dir-dl" onclick="event.stopPropagation();downloadFolder('${dirPath.split('/').map(encodeURIComponent).join('/')}')" title="Download as zip">&#128230;</span>
+        <span class="file-dir-dl" onclick="event.stopPropagation();downloadFolder('${dirPath}')" title="Download as zip">&#128230;</span>
       </span>
       <div class="file-dir-children">${renderNode(child, (indent || 0) + 16, dirPath)}</div>
     </div>`;
@@ -2747,7 +2784,7 @@ function renderNode(node, indent, prefix) {
                  f.size < 1048576 ? (f.size/1024).toFixed(1) + ' KB' :
                  (f.size/1048576).toFixed(1) + ' MB') : '';
     const time = f.mtime ? new Date(f.mtime * 1000).toLocaleTimeString() : '';
-    const encPath = f.path.split('/').map(encodeURIComponent).join('/');
+    const encPath = _originalPath(f.path).split('/').map(encodeURIComponent).join('/');
     const pad = indent ? 'padding-left:' + (indent + 8) + 'px' : 'padding-left:16px';
     const isImg = /\.(?:png|jpe?g|gif|webp|bmp|svg)$/i.test(f.leafName || f.name);
     const clickFn = isImg
