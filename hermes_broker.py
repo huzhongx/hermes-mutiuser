@@ -197,12 +197,23 @@ class ProcessBroker:
         if self._draining:
             raise RuntimeError("Broker is draining, not accepting new connections")
 
-        # 已有活跃进程 → 直接返回
+        # 已有活跃进程 → 检查存活
         async with self._lock:
             existing = self._procs.get(user_id)
             if existing and existing.status == "active":
-                existing.touch()
-                return self._make_info(existing)
+                # Detect crashed/killed processes
+                try:
+                    os.kill(existing.pid, 0)
+                except ProcessLookupError:
+                    logger.info(f"[{user_id}] 进程 PID={existing.pid} 已死亡，重新分配")
+                    self._procs.pop(user_id, None)
+                    self._free_port(existing.port)
+                    existing = None
+                except OSError:
+                    pass
+                if existing:
+                    existing.touch()
+                    return self._make_info(existing)
 
         # 容量检查
         async with self._lock:
@@ -415,7 +426,7 @@ class ProcessBroker:
             logger.info(f"[{user_id}] 启动 dashboard port={port}")
             proc.process = await asyncio.create_subprocess_exec(
                 _HERMES_PYTHON, "-m", _HERMES_MODULE,
-                "dashboard", "--tui", "--skip-build",
+                "dashboard", "--skip-build",
                 "--host", "127.0.0.1",
                 "--port", str(port),
                 "--no-open",
@@ -447,20 +458,24 @@ class ProcessBroker:
 
     async def _wait_ready(self, proc: HermesProcess):
         url = f"http://127.0.0.1:{proc.port}"
-        for _ in range(45):
-            await asyncio.sleep(2)
-            try:
-                async with aiohttp.ClientSession() as sess:
-                    async with sess.get(url + "/", timeout=aiohttp.ClientTimeout(total=5)) as resp:
-                        if resp.status != 200:
-                            continue
-                        html = await resp.text()
-                        m = TOKEN_RE.search(html)
-                        if m:
-                            proc.ws_token = m.group(1)
-                            return
-            except Exception:
-                continue
+        timeout = aiohttp.ClientTimeout(total=3)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as sess:
+                for i in range(30):
+                    await asyncio.sleep(0.3 if i < 5 else 0.5)
+                    try:
+                        async with sess.get(url + "/") as resp:
+                            if resp.status != 200:
+                                continue
+                            html = await resp.text()
+                            m = TOKEN_RE.search(html)
+                            if m:
+                                proc.ws_token = m.group(1)
+                                return
+                    except Exception:
+                        continue
+        finally:
+            pass
         raise RuntimeError("dashboard 启动超时")
 
     async def _flush_and_kill(self, proc: HermesProcess):
@@ -658,10 +673,21 @@ class ProcessBroker:
             try:
                 await asyncio.sleep(60)
                 now = time.time()
-                to_close = [
-                    uid for uid, p in self._procs.items()
-                    if p.status == "active" and now - p.last_active_at > self.idle_timeout
-                ]
+                to_close = []
+                for uid, p in list(self._procs.items()):
+                    if p.status != "active":
+                        continue
+                    # Detect crashed/killed processes
+                    try:
+                        os.kill(p.pid, 0)
+                    except ProcessLookupError:
+                        logger.info(f"[{uid}] 进程 PID={p.pid} 已死亡，回收")
+                        to_close.append(uid)
+                        continue
+                    except OSError:
+                        pass
+                    if now - p.last_active_at > self.idle_timeout:
+                        to_close.append(uid)
                 for uid in to_close:
                     logger.info(f"[{uid}] 空闲超时 {self.idle_timeout}s，回收")
                     await self.release(uid)
@@ -1681,6 +1707,8 @@ async def proxy_api(request: Request, path: str):
     proc = await _proc_for_request(request)
     body = await request.body()
     ct = request.headers.get("content-type", "")
+    if path == "config" and request.method == "PUT" and body:
+        logger.info(f"PUT /api/config body (user={getattr(proc,'user_id','?')}): {body[:500]}")
     return await _hermes_http(proc, request.method, f"/api/{path}", body, ct)
 
 
