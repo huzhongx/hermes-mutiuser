@@ -422,6 +422,7 @@ class ProcessBroker:
             proc_env = os.environ.copy()
             proc_env["HERMES_HOME"] = str(user_home)
             proc_env["HERMES_WRITE_SAFE_ROOT"] = str(work_dir)
+            proc_env["HERMES_NGINX_DOMAIN"] = os.environ.get("HERMES_NGINX_DOMAIN", "")
 
             logger.info(f"[{user_id}] 启动 dashboard port={port}")
             proc.process = await asyncio.create_subprocess_exec(

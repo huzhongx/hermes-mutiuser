@@ -1430,6 +1430,15 @@ function handleWS(data, initResolve) {
             outEl.textContent = output.length > 300 ? output.substring(0, 300) + '...' : output;
             stepEl.appendChild(outEl);
           }
+          // Detect MCP OAuth reauth requirement in tool error output
+          if (error && output) {
+            try {
+              const result = JSON.parse(output);
+              if (result.needs_reauth && result.oauth_url) {
+                showMcpOAuthPrompt(result.server || result.name || 'MCP', result.oauth_url);
+              }
+            } catch(e) {}
+          }
           scrollBottom();
         }
 
@@ -3396,6 +3405,16 @@ async function showMcpDetail(name) {
     html += '<div class="sd-section"><div class="sd-label">Environment Variables</div>';
     html += '<textarea id="mcpEditEnv" class="s-input" rows="4" style="resize:vertical;width:100%;box-sizing:border-box">' + esc(envStr) + '</textarea></div>';
     html += '<div id="mcpEditMsg" style="font-size:12px;display:none;margin-top:8px"></div>';
+
+    // OAuth Connect button for servers with auth: oauth
+    if (s.auth === 'oauth') {
+      html += '<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border,#e5e7eb)">';
+      html += '<div class="sd-label">OAuth Authorization</div>';
+      html += '<div id="mcpOauthStatus" style="font-size:12px;color:var(--text-dim);margin-bottom:6px">Click Connect to authorize access via OAuth.</div>';
+      html += '<button class="btn btn-primary" style="font-size:12px;padding:4px 12px" onclick="startMcpOAuth(\'' + esc(name).replace(/'/g, "\\'") + '\')">&#128274; Connect</button>';
+      html += '</div>';
+    }
+
     html += '<div class="sd-actions"><button class="btn btn-primary" onclick="saveMcpDetail(\'' + esc(name).replace(/'/g, "\\'") + '\')">Save</button>';
     html += '<button class="btn" onclick="this.closest(\'.skill-detail\').remove()">Close</button></div>';
     html += '</div></div>';
@@ -3448,6 +3467,72 @@ async function toggleSkill(name, enabled) {
   } catch (e) {
     addSystemMsg('Toggle failed: ' + e.message);
   }
+}
+
+// ── MCP OAuth ──
+
+async function startMcpOAuth(name) {
+  const statusEl = $('mcpOauthStatus');
+  if (statusEl) {
+    statusEl.textContent = 'Starting OAuth flow...';
+    statusEl.style.color = 'var(--text-dim)';
+  }
+  try {
+    await hermesHTTP('POST', '/api/mcp/servers/' + encodeURIComponent(name) + '/oauth/start');
+    // Poll for authorization URL
+    const pollResult = await new Promise((resolve, reject) => {
+      const poll = async () => {
+        try {
+          const status = await hermesHTTP('GET', '/api/mcp/servers/' + encodeURIComponent(name) + '/oauth/status');
+          if (status.status === 'awaiting_callback' && status.authorization_url) { resolve(status); }
+          else if (status.status === 'completed') { resolve(status); }
+          else if (status.status === 'failed') { reject(new Error(status.error || 'OAuth flow failed')); }
+          else { setTimeout(poll, 500); }
+        } catch (e) { reject(e); }
+      };
+      poll();
+      setTimeout(() => reject(new Error('Timeout waiting for authorization URL')), 30000);
+    });
+    if (pollResult.status === 'completed') {
+      if (statusEl) { statusEl.textContent = 'Authorized!'; statusEl.style.color = 'var(--success)'; }
+      return;
+    }
+    window.open(pollResult.authorization_url, '_blank');
+    if (statusEl) { statusEl.textContent = 'Opened in browser. Waiting for callback...'; statusEl.style.color = 'var(--text-dim)'; }
+    // Poll for completion
+    await new Promise((resolve, reject) => {
+      const poll = async () => {
+        try {
+          const status = await hermesHTTP('GET', '/api/mcp/servers/' + encodeURIComponent(name) + '/oauth/status');
+          if (status.status === 'completed') { resolve(status); }
+          else if (status.status === 'failed') { reject(new Error(status.error || 'OAuth failed')); }
+          else { setTimeout(poll, 1000); }
+        } catch (e) { reject(e); }
+      };
+      poll();
+      setTimeout(() => reject(new Error('OAuth callback timed out (120s)')), 120000);
+    });
+    if (statusEl) { statusEl.textContent = 'Authorized!'; statusEl.style.color = 'var(--success)'; }
+    addSystemMsg('MCP server "' + name + '" OAuth authorization completed.');
+  } catch (e) {
+    if (statusEl) { statusEl.textContent = 'Failed: ' + e.message; statusEl.style.color = 'var(--danger)'; }
+    addSystemMsg('MCP OAuth failed: ' + e.message);
+  }
+}
+
+function showMcpOAuthPrompt(serverName, oauthUrl) {
+  const msgArea = $('messages');
+  if (!msgArea) return;
+  const el = document.createElement('div');
+  el.className = 'msg-container user-msg';
+  el.innerHTML = '<div class="msg-bubble" style="border-left:3px solid var(--warning,#f59e0b);padding:12px">'
+    + '<div style="font-weight:600;margin-bottom:6px">MCP OAuth Required</div>'
+    + '<div style="font-size:13px;color:var(--text-dim);margin-bottom:10px">Server <strong>' + esc(serverName) + '</strong> requires re-authorization.</div>'
+    + '<button class="btn btn-primary" style="font-size:12px;padding:4px 12px" onclick="window.open(\'' + esc(oauthUrl) + '\',\'_blank\');this.textContent=\'Opened — waiting...\';this.disabled=true;this.style.opacity=\'0.6\'">&#128274; Authorize in Browser</button>'
+    + '<div style="font-size:11px;color:var(--text-dim);margin-top:6px">A new tab will open. Complete the authorization, then retry the tool.</div>'
+    + '</div>';
+  msgArea.appendChild(el);
+  scrollBottom();
 }
 
 function switchSkillTab(tabId, btn) {
