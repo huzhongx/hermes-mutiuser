@@ -3384,6 +3384,32 @@ async function toggleMcpServer(name, enabled, isSystem) {
   }
 }
 
+async function removeMcpServer(name) {
+  if (!confirm('Remove MCP server "' + name + '"? This will disconnect it and delete its configuration.')) return;
+  try {
+    await hermesHTTP('DELETE', '/api/mcp/servers/' + encodeURIComponent(name));
+    addSystemMsg('MCP server "' + name + '" removed.');
+    loadSettingsMcp();
+    const detail = document.querySelector('.skill-detail');
+    if (detail) detail.remove();
+  } catch (e) {
+    addSystemMsg('Remove failed: ' + e.message);
+  }
+}
+
+async function revokeMcpOAuth(name) {
+  if (!confirm('Revoke OAuth authorization for "' + name + '"? Tokens will be cleared.')) return;
+  try {
+    await hermesHTTP('POST', '/api/mcp/servers/' + encodeURIComponent(name) + '/oauth/revoke');
+    addSystemMsg('OAuth authorization for "' + name + '" revoked.');
+    loadSettingsMcp();
+    const detail = document.querySelector('.skill-detail');
+    if (detail) detail.remove();
+  } catch (e) {
+    addSystemMsg('Revoke failed: ' + e.message);
+  }
+}
+
 async function showMcpDetail(name) {
   const modal = $('skillDetailModal');
   if (!modal) return;
@@ -3406,16 +3432,25 @@ async function showMcpDetail(name) {
     html += '<textarea id="mcpEditEnv" class="s-input" rows="4" style="resize:vertical;width:100%;box-sizing:border-box">' + esc(envStr) + '</textarea></div>';
     html += '<div id="mcpEditMsg" style="font-size:12px;display:none;margin-top:8px"></div>';
 
-    // OAuth Connect button for servers with auth: oauth
+    // OAuth Connect/Disconnect for servers with auth: oauth
     if (s.auth === 'oauth') {
       html += '<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border,#e5e7eb)">';
       html += '<div class="sd-label">OAuth Authorization</div>';
       html += '<div id="mcpOauthStatus" style="font-size:12px;color:var(--text-dim);margin-bottom:6px">Click Connect to authorize access via OAuth.</div>';
+      html += '<div style="display:flex;gap:6px">';
       html += '<button class="btn btn-primary" style="font-size:12px;padding:4px 12px" onclick="startMcpOAuth(\'' + esc(name).replace(/'/g, "\\'") + '\')">&#128274; Connect</button>';
-      html += '</div>';
+      html += '<button class="btn" style="font-size:12px;padding:4px 12px;border-color:var(--danger);color:var(--danger)" onclick="revokeMcpOAuth(\'' + esc(name).replace(/'/g, "\\'") + '\')">&#128275; Revoke</button>';
+      html += '</div></div>';
     }
 
-    html += '<div class="sd-actions"><button class="btn btn-primary" onclick="saveMcpDetail(\'' + esc(name).replace(/'/g, "\\'") + '\')">Save</button>';
+    // Remove button for user servers (not bundled system servers)
+    const BUNDLED = ['linear', 'n8n'];
+    const canRemove = !BUNDLED.includes(name);
+    html += '<div class="sd-actions">';
+    if (canRemove) {
+      html += '<button class="btn" style="font-size:12px;padding:4px 12px;border-color:var(--danger);color:var(--danger)" onclick="removeMcpServer(\'' + esc(name).replace(/'/g, "\\'") + '\')">Remove Server</button>';
+    }
+    html += '<button class="btn btn-primary" onclick="saveMcpDetail(\'' + esc(name).replace(/'/g, "\\'") + '\')">Save</button>';
     html += '<button class="btn" onclick="this.closest(\'.skill-detail\').remove()">Close</button></div>';
     html += '</div></div>';
     modal.innerHTML = html;
