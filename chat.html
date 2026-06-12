@@ -3513,26 +3513,30 @@ async function startMcpOAuth(name) {
     statusEl.style.color = 'var(--text-dim)';
   }
   try {
-    await hermesHTTP('POST', '/api/mcp/servers/' + encodeURIComponent(name) + '/oauth/start');
-    // Poll for authorization URL
-    const pollResult = await new Promise((resolve, reject) => {
-      const poll = async () => {
-        try {
-          const status = await hermesHTTP('GET', '/api/mcp/servers/' + encodeURIComponent(name) + '/oauth/status');
-          if (status.status === 'awaiting_callback' && status.authorization_url) { resolve(status); }
-          else if (status.status === 'completed') { resolve(status); }
-          else if (status.status === 'failed') { reject(new Error(status.error || 'OAuth flow failed')); }
-          else { setTimeout(poll, 500); }
-        } catch (e) { reject(e); }
-      };
-      poll();
-      setTimeout(() => reject(new Error('Timeout waiting for authorization URL')), 30000);
-    });
-    if (pollResult.status === 'completed') {
+    // POST /oauth/start now returns authorization_url directly (waits up to 30s)
+    const result = await hermesHTTP('POST', '/api/mcp/servers/' + encodeURIComponent(name) + '/oauth/start');
+
+    if (result.status === 'completed') {
       if (statusEl) { statusEl.textContent = 'Authorized!'; statusEl.style.color = 'var(--success)'; }
+      addSystemMsg('MCP server "' + name + '" already authorized.');
       return;
     }
-    window.open(pollResult.authorization_url, '_blank');
+    if (result.status === 'failed') {
+      if (statusEl) { statusEl.textContent = 'Failed'; statusEl.style.color = 'var(--danger)'; }
+      addSystemMsg('MCP OAuth failed: ' + (result.error || 'Unknown error'));
+      return;
+    }
+    if (result.status === 'timeout') {
+      if (statusEl) { statusEl.textContent = 'Timeout'; statusEl.style.color = 'var(--danger)'; }
+      addSystemMsg('MCP OAuth timed out waiting for authorization URL.');
+      return;
+    }
+    if (!result.authorization_url) {
+      addSystemMsg('MCP OAuth: unexpected status: ' + result.status);
+      return;
+    }
+
+    window.open(result.authorization_url, '_blank');
     if (statusEl) { statusEl.textContent = 'Opened in browser. Waiting for callback...'; statusEl.style.color = 'var(--text-dim)'; }
     // Poll for completion
     await new Promise((resolve, reject) => {
@@ -3545,7 +3549,7 @@ async function startMcpOAuth(name) {
         } catch (e) { reject(e); }
       };
       poll();
-      setTimeout(() => reject(new Error('OAuth callback timed out (120s)')), 120000);
+      setTimeout(() => reject(new Error('OAuth callback timed out (300s)')), 300000);
     });
     if (statusEl) { statusEl.textContent = 'Authorized!'; statusEl.style.color = 'var(--success)'; }
     addSystemMsg('MCP server "' + name + '" OAuth authorization completed.');

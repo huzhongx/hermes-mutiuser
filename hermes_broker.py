@@ -1575,7 +1575,9 @@ async def proxy_skill_upload(request: Request):
 
         skill_name = src_dir.name
         dest = skills_dir / skill_name
-        if dest.exists():
+        if dest.is_symlink():
+            dest.unlink()
+        elif dest.exists():
             shutil.rmtree(str(dest))
         shutil.copytree(str(src_dir), str(dest))
 
