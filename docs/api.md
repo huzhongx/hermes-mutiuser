@@ -184,24 +184,59 @@ Web Proxy 层是浏览器端的唯一对外入口。所有内部 URL、端口号
 
 ### HTTP Proxy
 
+浏览器通过 `/api/*` 统一入口访问，但请求由两层分别处理：
+
+| 层 | 实现 | 说明 |
+|----|------|------|
+| **Broker 自身处理** | `hermes_broker.py` | JWT cookie 认证，broker 直接实现逻辑 |
+| **透传到 Hermes 进程** | `hermes_broker.py` → hermes-agent `web_server.py` | broker 代理到 `127.0.0.1:{port}/api/*`，Bearer token 认证 |
+
+#### Broker 自身实现的接口
+
 | 方法 | 对外路径 | 说明 |
 |------|---------|------|
-| POST | `/api/sessions` | 分配/获取进程（替代 `/broker/sessions`，不返回 port/token） |
+| POST | `/api/sessions` | 分配/获取进程（不返回 port/token） |
 | GET | `/api/sessions` | 会话列表 |
+| DELETE | `/api/sessions` | 删除当前会话 |
+| POST | `/api/upload` | 文件上传（multipart 或 JSON base64，最大 50MB） |
+| GET | `/api/files` | 文件列表 |
+| GET | `/api/files/download/{path}` | 文件/文件夹下载 |
+| GET | `/api/workdirs` | 工作目录列表 |
+| GET | `/api/screenshot` | 截图 |
+| POST | `/api/skills/upload` | 技能文件上传 |
+| GET | `/api/skills/list` | 技能列表 |
+| DELETE | `/api/skills/{name}` | 删除技能 |
+
+#### 透传到 Hermes 进程的接口
+
+以下接口由 broker 的 catch-all 路由（`/api/{path:path}`）转发到用户对应的 Hermes dashboard 进程：
+
+| 方法 | 对外路径 | 说明 |
+|------|---------|------|
 | GET | `/api/sessions/{key}/messages` | 消息历史 |
-| DELETE | `/api/sessions/{key}` | 删除会话 |
+| DELETE | `/api/sessions/{key}` | 删除指定会话 |
 | GET | `/api/model/info` | 模型信息 |
 | POST | `/api/model/set` | 切换模型 |
 | GET | `/api/model/options` | 模型选项 |
-| GET | `/api/skills` | 技能列表 |
 | PUT | `/api/skills/toggle` | 技能开关 |
-| POST | `/api/upload` | 文件上传（替代 `/broker/upload`，最大 50MB） |
-| GET | `/api/files/{filename}` | 文件下载（替代 `/broker/files/{user_id}/{filename}`） |
 | GET | `/api/cron/jobs` | 定时任务列表 |
 | POST | `/api/cron/jobs` | 创建定时任务 |
 | PUT | `/api/cron/jobs/{id}` | 更新定时任务 |
 | DELETE | `/api/cron/jobs/{id}` | 删除定时任务 |
+| GET | `/api/config` | 配置读取 |
+| PUT | `/api/config` | 配置更新 |
+| GET | `/api/env` | 环境变量 |
+| PUT | `/api/env` | 设置环境变量 |
+| DELETE | `/api/env` | 删除环境变量 |
 | GET | `/api/status` | 状态（公开） |
+| GET | `/api/analytics/usage` | 用量统计 |
+| POST | `/api/mcp/servers` | MCP 服务器管理 |
+| GET | `/api/mcp/servers/{name}/oauth/start` | MCP OAuth 授权 |
+| GET | `/api/mcp/servers/{name}/oauth/status` | MCP OAuth 状态 |
+| POST | `/api/mcp/servers/{name}/oauth/revoke` | MCP OAuth 撤销 |
+| DELETE | `/api/mcp/servers/{name}` | 删除 MCP 服务器 |
+
+> **注意**：透传接口的详细文档见「二-C、Hermes Dashboard HTTP REST API」章节。此处仅列出路由归属。
 
 ### POST /api/sessions
 
@@ -213,6 +248,159 @@ Web Proxy 层是浏览器端的唯一对外入口。所有内部 URL、端口号
   "created_at": 1717000000.0
 }
 ```
+
+### 文件管理接口
+
+#### POST /api/upload
+
+上传文件到用户工作目录。
+
+**认证**: JWT cookie
+
+**Content-Type**: 支持两种格式：
+- `multipart/form-data` — 字段 `file` 为文件内容
+- `application/json` — JSON + base64 编码（适用于无法转发 multipart 的代理场景）
+
+**请求（multipart）**:
+```
+POST /api/upload
+Content-Type: multipart/form-data
+
+file: <binary>
+```
+
+**请求（JSON base64）**:
+```json
+{
+  "filename": "report.pdf",
+  "data": "<base64-encoded-content>"
+}
+```
+
+**响应** `200`:
+```json
+{
+  "path": "/tmp/hermes_sessions/alice/session1/uploads/report.pdf",
+  "name": "report.pdf",
+  "size": 123456
+}
+```
+
+**错误**:
+| 状态码 | 说明 |
+|--------|------|
+| 400 | 缺少 `file` 字段 / 缺少 `filename` 和 `data` / 不支持的 Content-Type |
+| 401 | 未登录 |
+| 404 | 无活跃进程 |
+
+**上传限制**: nginx 配置 `client_max_body_size 50m`
+
+**文件保存路径**: `{work_dir}/uploads/{safe_name}`，文件名中非 `\w.\-` 字符替换为 `_`
+
+---
+
+#### GET /api/files
+
+列出用户工作目录中的文件。自动跳过 `hermes_home`、`logs`、`__pycache__` 和隐藏文件（`.` 开头）。
+
+**认证**: JWT cookie
+
+**查询参数**:
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `session` | `""` | `current` — 仅当前会话目录；`<dir_name>` — 指定目录；空 — 所有会话目录 |
+| `scope` | `all` | `all` — 所有目录；`current` — 当前会话目录 |
+
+**请求示例**:
+```
+GET /api/files?session=current
+GET /api/files?session=workspace:hiring
+GET /api/files                          # 所有会话目录
+```
+
+**响应** `200`:
+```json
+[
+  {
+    "path": "workspace:hiring/uploads/resume.csv",
+    "name": "resume.csv",
+    "size": 4096,
+    "mtime": 1717000000.0
+  },
+  {
+    "path": "workspace:talent/output/report.md",
+    "name": "report.md",
+    "size": 2048,
+    "mtime": 1716999900.0
+  }
+]
+```
+
+---
+
+#### GET /api/files/download/{file_path:path}
+
+下载文件或文件夹。路径相对于 `user_root`（即 `{work_root}/{user_id}/`）。
+
+**认证**: JWT cookie
+
+**路径安全**: 阻止路径穿越（`..`），禁止访问 `hermes_home`、`logs`、隐藏目录（`.cache` 等），例外：`hermes_home/cache/screenshots`。
+
+**请求示例**:
+```
+GET /api/files/download/workspace:hiring/uploads/report.pdf
+GET /api/files/download/workspace:talent/output
+```
+
+**响应**:
+
+| 目标类型 | 响应 | Content-Type |
+|----------|------|-------------|
+| 文件（图片: png/jpg/jpeg/gif/webp/bmp/svg） | `FileResponse`（浏览器内联显示） | 对应图片类型 |
+| 文件（其他类型） | `FileResponse`（下载，带 `Content-Disposition`） | `application/octet-stream` |
+| 文件夹 | `StreamingResponse`（ZIP 打包下载） | `application/zip` |
+
+**文件夹 ZIP 打包**: 递归遍历子目录，跳过 `.` 开头的隐藏文件。
+
+**错误**:
+| 状态码 | 说明 |
+|--------|------|
+| 403 | 路径穿越 / 访问被阻止的目录 |
+| 404 | 文件/目录不存在 |
+
+---
+
+#### GET /api/workdirs
+
+列出用户的所有工作目录（workspace）。
+
+**认证**: JWT cookie
+
+**响应** `200`:
+```json
+[
+  {
+    "name": "workspace:hiring",
+    "file_count": 5,
+    "dir_count": 2,
+    "mtime": 1717000000.0,
+    "is_current": true
+  },
+  {
+    "name": "workspace:talent",
+    "file_count": 3,
+    "dir_count": 1,
+    "mtime": 1716999900.0,
+    "is_current": false
+  }
+]
+```
+
+- `is_current`: 标识当前活跃进程的工作目录
+- 跳过 `hermes_home`、`logs`、`__pycache__`、`uploads`、隐藏目录
+
+---
 
 ### 安全对比
 
