@@ -38,7 +38,7 @@ import aiohttp
 import jwt as pyjwt
 import requests as req_lib
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 logging.basicConfig(
@@ -773,7 +773,7 @@ async def lifespan(app: FastAPI):
     await broker.stop()
 
 
-app = FastAPI(title="Hermes Process Broker", lifespan=lifespan)
+app = FastAPI(title="Hermes Process Broker", lifespan=lifespan, docs_url=None, redoc_url=None)
 
 
 class AcquireRequest(BaseModel):
@@ -1697,6 +1697,101 @@ async def proxy_skill_delete(skill_name: str, request: Request):
         logger.warning(f"[{proc.user_id}] skills.reload after delete failed: {e}")
 
     return {"status": "deleted", "name": skill_name}
+
+
+# ── API Documentation ──────────────────────────────────────────────
+
+@app.get("/docs/{name}")
+async def serve_api_doc(name: str):
+    """Render a markdown doc from docs/ as HTML."""
+    import pathlib
+    import markdown
+    _allowed = {"api", "api-mcp-oauth", "api-skills"}
+    if name not in _allowed:
+        raise HTTPException(status_code=404, detail="Document not found")
+    doc_path = pathlib.Path(__file__).parent / "docs" / f"{name}.md"
+    if not doc_path.is_file():
+        raise HTTPException(status_code=404, detail="Document not found")
+    md_text = doc_path.read_text(encoding="utf-8")
+    body = markdown.markdown(
+        md_text,
+        extensions=["tables", "fenced_code", "toc", "codehilite"],
+        extension_configs={"codehilite": {"css_class": "highlight", "guess_lang": False}},
+    )
+    # Collect API doc names for sidebar (only api* prefixed files)
+    docs_dir = pathlib.Path(__file__).parent / "docs"
+    nav_items = []
+    for f in sorted(docs_dir.glob("api*.md")):
+        slug = f.stem
+        title = slug.replace("-", " ").replace("_", " ").title()
+        active = " active" if slug == name else ""
+        nav_items.append(f'<li><a href="/docs/{slug}" class="nav-link{active}">{title}</a></li>')
+
+    html = f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hermes Platform API Docs — {name}</title>
+<style>
+  :root {{ --bg: #0d1117; --surface: #161b22; --border: #30363d; --text: #c9d1d9;
+           --heading: #f0f6fc; --accent: #58a6ff; --code-bg: #1c2128; --link: #58a6ff; }}
+  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+          background: var(--bg); color: var(--text); display: flex; min-height: 100vh; }}
+  aside {{ width: 260px; min-width: 260px; background: var(--surface); border-right: 1px solid var(--border);
+           padding: 24px 16px; position: sticky; top: 0; height: 100vh; overflow-y: auto; }}
+  aside h2 {{ color: var(--heading); font-size: 16px; margin-bottom: 12px; padding: 0 8px; }}
+  aside ul {{ list-style: none; }}
+  aside li {{ margin-bottom: 2px; }}
+  .nav-link {{ display: block; padding: 6px 12px; border-radius: 6px; color: var(--text);
+               text-decoration: none; font-size: 14px; transition: background .15s; }}
+  .nav-link:hover {{ background: rgba(88,166,255,.1); color: var(--accent); }}
+  .nav-link.active {{ background: rgba(88,166,255,.15); color: var(--accent); font-weight: 600; }}
+  main {{ flex: 1; max-width: 960px; margin: 0 auto; padding: 40px 32px 80px; }}
+  h1 {{ color: var(--heading); font-size: 28px; margin: 32px 0 16px; border-bottom: 1px solid var(--border); padding-bottom: 12px; }}
+  h2 {{ color: var(--heading); font-size: 22px; margin: 28px 0 12px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }}
+  h3 {{ color: var(--heading); font-size: 18px; margin: 24px 0 8px; }}
+  h4 {{ color: var(--heading); font-size: 15px; margin: 20px 0 6px; }}
+  p {{ margin: 8px 0; line-height: 1.7; }}
+  a {{ color: var(--link); text-decoration: none; }}
+  a:hover {{ text-decoration: underline; }}
+  table {{ border-collapse: collapse; margin: 12px 0; width: 100%; font-size: 14px; }}
+  th, td {{ border: 1px solid var(--border); padding: 8px 12px; text-align: left; }}
+  th {{ background: var(--surface); color: var(--heading); font-weight: 600; }}
+  tr:nth-child(even) {{ background: rgba(22,27,34,.5); }}
+  code {{ background: var(--code-bg); padding: 2px 6px; border-radius: 4px; font-size: 13px;
+          font-family: 'SF Mono', 'Fira Code', Consolas, monospace; }}
+  pre {{ background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px;
+         padding: 16px; margin: 12px 0; overflow-x: auto; }}
+  pre code {{ background: none; padding: 0; font-size: 13px; line-height: 1.6; }}
+  blockquote {{ border-left: 3px solid var(--accent); margin: 12px 0; padding: 8px 16px;
+                background: rgba(88,166,255,.05); }}
+  ul, ol {{ margin: 8px 0; padding-left: 24px; }}
+  li {{ margin: 4px 0; line-height: 1.6; }}
+  hr {{ border: none; border-top: 1px solid var(--border); margin: 24px 0; }}
+  @media (max-width: 768px) {{
+    aside {{ display: none; }}
+    main {{ padding: 20px 16px; }}
+  }}
+</style>
+</head>
+<body>
+<aside>
+  <h2>Hermes Docs</h2>
+  <ul>{"".join(nav_items)}</ul>
+</aside>
+<main>{body}</main>
+</body>
+</html>"""
+    return HTMLResponse(content=html)
+
+
+@app.get("/docs")
+async def docs_index():
+    """Redirect to default doc."""
+    from starlette.responses import RedirectResponse
+    return RedirectResponse(url="/docs/api")
 
 
 # ── Generic HTTP proxy catch-all (MUST be last /api/* route) ──
