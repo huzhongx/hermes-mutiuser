@@ -1,0 +1,90 @@
+diff --git a/tools/mcp_tool.py b/tools/mcp_tool.py
+index 5c3c46c4d..ce54ba8a1 100644
+--- a/tools/mcp_tool.py
++++ b/tools/mcp_tool.py
+@@ -2727,11 +2727,32 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
+                 "MCP tool %s/%s call failed: %s",
+                 server_name, tool_name, exc,
+             )
+-            return json.dumps({
++
++            # Check for pending OAuth authorization URL (Scenario B)
++            oauth_url = None
++            callback_port = None
++            try:
++                from tools.mcp_oauth import get_pending_oauth_authorization_url
++                pending = get_pending_oauth_authorization_url()
++                if pending:
++                    oauth_url = pending["authorization_url"]
++                    callback_port = pending["callback_port"]
++            except Exception:
++                pass
++
++            error_result = {
+                 "error": _sanitize_error(
+-                    f"MCP call failed: {type(exc).__name__}: {_exc_str(exc)}"
+-                )
+-            }, ensure_ascii=False)
++                    f"MCP server '{server_name}' requires re-authentication. "
++                    f"Open the authorization URL in your browser to complete OAuth."
++                ),
++                "needs_reauth": True,
++                "server": server_name,
++            }
++            if oauth_url:
++                error_result["oauth_url"] = oauth_url
++                error_result["oauth_callback_port"] = callback_port
++
++            return json.dumps(error_result, ensure_ascii=False)
+ 
+     return _handler
+ 
+@@ -3811,6 +3832,48 @@ def shutdown_mcp_servers():
+     _stop_mcp_loop()
+ 
+ 
++def disconnect_mcp_server(name: str) -> bool:
++    """Disconnect a single MCP server at runtime.
++
++    Shuts down the server task, deregisters its tools, and cleans up
++    circuit-breaker state.  Returns True if the server was connected,
++    False if it was not found in the runtime registry.
++    """
++    with _lock:
++        server = _servers.pop(name, None)
++    if server is None:
++        return False
++
++    async def _do_shutdown():
++        try:
++            await server.shutdown()
++        except Exception as exc:
++            logger.debug("Error shutting down MCP server '%s': %s", name, exc)
++
++    with _lock:
++        loop = _mcp_loop
++    if loop is not None and loop.is_running():
++        from agent.async_utils import safe_schedule_threadsafe
++        future = safe_schedule_threadsafe(
++            _do_shutdown(), loop,
++            logger=logger,
++            log_message="MCP disconnect: failed to schedule",
++        )
++        if future is not None:
++            try:
++                future.result(timeout=15)
++            except BaseException as exc:
++                logger.debug("Error during MCP server '%s' shutdown: %s", name, exc)
++
++    # Clean up circuit-breaker and parallel-safe state
++    _server_error_counts.pop(name, None)
++    _server_breaker_opened_at.pop(name, None)
++    _parallel_safe_servers.discard(sanitize_mcp_name_component(name))
++
++    logger.info("MCP server '%s' disconnected", name)
++    return True
++
++
+ def _kill_orphaned_mcp_children(include_active: bool = False) -> None:
+     """Best-effort graceful shutdown of stdio MCP subprocesses to reap orphans.
+ 
