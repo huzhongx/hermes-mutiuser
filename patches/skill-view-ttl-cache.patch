@@ -1,16 +1,90 @@
+diff --git a/agent/prompt_builder.py b/agent/prompt_builder.py
+index 3e7c729c0..79d88bb43 100644
+--- a/agent/prompt_builder.py
++++ b/agent/prompt_builder.py
+@@ -1356,6 +1356,9 @@ def build_skills_system_prompt(
+             "Skills also encode the user's preferred approach, conventions, and quality standards "
+             "for tasks like code review, planning, and testing — load them even for tasks you "
+             "already know how to do, because the skill defines how it should be done here.\n"
++            "If skill_view returns \"cached\": true, the skill was already loaded earlier in this "
++            "conversation — do NOT call skill_view on it again. The full content is in your "
++            "conversation history. Re-loading wastes tokens and time.\n"
+             "Whenever the user asks you to configure, set up, install, enable, disable, modify, "
+             "or troubleshoot Hermes Agent itself — its CLI, config, models, providers, tools, "
+             "skills, voice, gateway, plugins, or any feature — load the `hermes-agent` skill "
+diff --git a/tools/skill_manager_tool.py b/tools/skill_manager_tool.py
+index 4f96b171e..d553f0963 100644
+--- a/tools/skill_manager_tool.py
++++ b/tools/skill_manager_tool.py
+@@ -282,14 +282,17 @@ def _find_skill(name: str) -> Optional[Dict[str, Any]]:
+     Searches the local skills dir (~/.hermes/skills/) first, then any
+     external dirs configured via skills.external_dirs.  Returns
+     {"path": Path} or None.
++
++    Uses ``iter_skill_index_files`` (``os.walk(followlinks=True)``) instead
++    of ``Path.rglob`` because Python 3.12's rglob does not follow symlink
++    directories.  When skills are symlinked into the user's skills/ dir
++    (common in multi-user deployments), rglob silently skips them.
+     """
+-    from agent.skill_utils import get_all_skills_dirs, is_excluded_skill_path
++    from agent.skill_utils import get_all_skills_dirs, iter_skill_index_files
+     for skills_dir in get_all_skills_dirs():
+         if not skills_dir.exists():
+             continue
+-        for skill_md in skills_dir.rglob("SKILL.md"):
+-            if is_excluded_skill_path(skill_md):
+-                continue
++        for skill_md in iter_skill_index_files(skills_dir, "SKILL.md"):
+             if skill_md.parent.name == name:
+                 return {"path": skill_md.parent}
+     return None
+@@ -307,7 +310,7 @@ def _find_skill_in_other_profiles(name: str) -> List[Tuple[str, Path]]:
+     matches: List[Tuple[str, Path]] = []
+     try:
+         from hermes_constants import get_default_hermes_root
+-        from agent.skill_utils import is_excluded_skill_path
++        from agent.skill_utils import is_excluded_skill_path, iter_skill_index_files
+     except Exception:
+         return matches
+ 
+@@ -350,9 +353,7 @@ def _find_skill_in_other_profiles(name: str) -> List[Tuple[str, Path]]:
+         if not skills_dir.is_dir():
+             continue
+         try:
+-            for skill_md in skills_dir.rglob("SKILL.md"):
+-                if is_excluded_skill_path(skill_md):
+-                    continue
++            for skill_md in iter_skill_index_files(skills_dir, "SKILL.md"):
+                 if skill_md.parent.name == name:
+                     matches.append((profile_name, skill_md.parent))
+                     break  # one match per profile is enough
+@@ -962,6 +963,12 @@ def skill_manage(
+             clear_skills_system_prompt_cache(clear_snapshot=True)
+         except Exception:
+             pass
++        # Invalidate skill_view TTL cache so next view returns fresh content
++        try:
++            from tools.skills_tool import skill_view_cache_invalidate
++            skill_view_cache_invalidate(name)
++        except Exception:
++            pass
+         # Curator telemetry: bump patch_count on edit/patch/write_file (the actions
+         # that mutate an existing skill's guidance), drop the record on delete.
+         # Only mark a skill as agent-created when the background self-improvement
 diff --git a/tools/skills_tool.py b/tools/skills_tool.py
-index 48274ccfe..718d0dec9 100644
+index 5fb1f5610..a86f75889 100644
 --- a/tools/skills_tool.py
 +++ b/tools/skills_tool.py
-@@ -72,6 +72,7 @@ import logging
+@@ -72,6 +72,8 @@ import logging
  from hermes_constants import get_hermes_home, display_hermes_home
  import os
  import re
++import threading
 +import time
  from enum import Enum
  from pathlib import Path, PurePosixPath, PureWindowsPath
  from typing import Dict, Any, List, Optional, Set, Tuple
-@@ -107,6 +108,32 @@ _REMOTE_ENV_BACKENDS = frozenset(
+@@ -107,6 +109,32 @@ _REMOTE_ENV_BACKENDS = frozenset(
  )
  _secret_capture_callback = None
  
@@ -43,7 +117,7 @@ index 48274ccfe..718d0dec9 100644
  
  def _skill_lookup_path_error(name: str) -> Optional[str]:
      """Return an error if a local skill lookup *name* can escape search roots.
-@@ -1097,6 +1124,10 @@ def skill_view(
+@@ -1108,6 +1136,10 @@ def skill_view(
          # (local skills dir + configured external_dirs are all trusted)
          _outside_skills_dir = True
          _trusted_dirs = [SKILLS_DIR.resolve()]
@@ -54,7 +128,7 @@ index 48274ccfe..718d0dec9 100644
          try:
              _trusted_dirs.extend(d.resolve() for d in all_dirs[1:])
          except Exception:
-@@ -1568,11 +1599,52 @@ registry.register(
+@@ -1579,11 +1611,52 @@ registry.register(
  )
  def _skill_view_with_bump(args, **kw):
      """Invoke skill_view, then bump view_count on success. Best-effort: a
@@ -108,7 +182,7 @@ index 48274ccfe..718d0dec9 100644
      try:
          parsed = json.loads(result)
          if isinstance(parsed, dict) and parsed.get("success"):
-@@ -1582,10 +1654,9 @@ def _skill_view_with_bump(args, **kw):
+@@ -1593,10 +1666,9 @@ def _skill_view_with_bump(args, **kw):
              if resolved:
                  from tools.skill_usage import bump_use, bump_view
                  bump_view(str(resolved))
@@ -121,76 +195,3 @@ index 48274ccfe..718d0dec9 100644
      except Exception:
          pass
      return result
-diff --git a/agent/prompt_builder.py b/agent/prompt_builder.py
-index 26fcfaae3..beceaeffd 100644
---- a/agent/prompt_builder.py
-+++ b/agent/prompt_builder.py
-@@ -1289,6 +1289,9 @@ def build_skills_system_prompt(
-             "Skills also encode the user's preferred approach, conventions, and quality standards "
-             "for tasks like code review, planning, and testing — load them even for tasks you "
-             "already know how to do, because the skill defines how it should be done here.\n"
-+            "If skill_view returns \"cached\": true, the skill was already loaded earlier in this "
-+            "conversation — do NOT call skill_view on it again. The full content is in your "
-+            "conversation history. Re-loading wastes tokens and time.\n"
-             "Whenever the user asks you to configure, set up, install, enable, disable, modify, "
-             "or troubleshoot Hermes Agent itself — its CLI, config, models, providers, tools, "
-             "skills, voice, gateway, plugins, or any feature — load the `hermes-agent` skill "
-diff --git a/tools/skill_manager_tool.py b/tools/skill_manager_tool.py
-index c131db9d5..256116fb2 100644
---- a/tools/skill_manager_tool.py
-+++ b/tools/skill_manager_tool.py
-@@ -282,14 +282,17 @@ def _find_skill(name: str) -> Optional[Dict[str, Any]]:
-     Searches the local skills dir (~/.hermes/skills/) first, then any
-     external dirs configured via skills.external_dirs.  Returns
-     {"path": Path} or None.
-+
-+    Uses ``iter_skill_index_files`` (``os.walk(followlinks=True)``) instead
-+    of ``Path.rglob`` because Python 3.12's rglob does not follow symlink
-+    directories.  When skills are symlinked into the user's skills/ dir
-+    (common in multi-user deployments), rglob silently skips them.
-     """
--    from agent.skill_utils import get_all_skills_dirs, is_excluded_skill_path
-+    from agent.skill_utils import get_all_skills_dirs, iter_skill_index_files
-     for skills_dir in get_all_skills_dirs():
-         if not skills_dir.exists():
-             continue
--        for skill_md in skills_dir.rglob("SKILL.md"):
--            if is_excluded_skill_path(skill_md):
--                continue
-+        for skill_md in iter_skill_index_files(skills_dir, "SKILL.md"):
-             if skill_md.parent.name == name:
-                 return {"path": skill_md.parent}
-     return None
-@@ -307,7 +310,7 @@ def _find_skill_in_other_profiles(name: str) -> List[Tuple[str, Path]]:
-     matches: List[Tuple[str, Path]] = []
-     try:
-         from hermes_constants import get_default_hermes_root
--        from agent.skill_utils import is_excluded_skill_path
-+        from agent.skill_utils import is_excluded_skill_path, iter_skill_index_files
-     except Exception:
-         return matches
- 
-@@ -350,9 +353,7 @@ def _find_skill_in_other_profiles(name: str) -> List[Tuple[str, Path]]:
-         if not skills_dir.is_dir():
-             continue
-         try:
--            for skill_md in skills_dir.rglob("SKILL.md"):
--                if is_excluded_skill_path(skill_md):
--                    continue
-+            for skill_md in iter_skill_index_files(skills_dir, "SKILL.md"):
-                 if skill_md.parent.name == name:
-                     matches.append((profile_name, skill_md.parent))
-                     break  # one match per profile is enough
-@@ -880,6 +881,12 @@ def skill_manage(
-             clear_skills_system_prompt_cache(clear_snapshot=True)
-         except Exception:
-             pass
-+        # Invalidate skill_view TTL cache so next view returns fresh content
-+        try:
-+            from tools.skills_tool import skill_view_cache_invalidate
-+            skill_view_cache_invalidate(name)
-+        except Exception:
-+            pass
-         # Curator telemetry: bump patch_count on edit/patch/write_file (the actions
-         # that mutate an existing skill's guidance), drop the record on delete.
-         # Only mark a skill as agent-created when the background self-improvement
