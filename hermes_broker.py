@@ -423,6 +423,15 @@ class ProcessBroker:
             proc_env["HERMES_HOME"] = str(user_home)
             proc_env["HERMES_WRITE_SAFE_ROOT"] = str(work_dir)
             proc_env["HERMES_NGINX_DOMAIN"] = os.environ.get("HERMES_NGINX_DOMAIN", "")
+            # Inject OPENAI_BASE_URL + OPENAI_API_KEY so the auxiliary client
+            # (vision, title gen, etc.) can resolve the "custom" provider.
+            # Without these, bare "custom" falls back to credential pool which
+            # may pick an unrelated provider (e.g. minimax-cn).
+            _cfg_base, _cfg_key = _read_config_base_url(user_home)
+            if _cfg_base:
+                proc_env["OPENAI_BASE_URL"] = _cfg_base
+            if _cfg_key:
+                proc_env["OPENAI_API_KEY"] = _cfg_key
 
             logger.info(f"[{user_id}] 启动 dashboard port={port}")
             proc.process = await asyncio.create_subprocess_exec(
@@ -717,6 +726,38 @@ _JWT_SECRET = secrets.token_hex(32)
 _JWT_ALG = "HS256"
 _JWT_EXP_SECONDS = 7 * 24 * 3600  # 7 days
 _OAUTH_STATE_STORE: Dict[str, float] = {}  # state → created_at, in-memory
+
+
+def _read_config_base_url(user_home) -> tuple:
+    """Read the custom provider's (base_url, api_key) from the user's config.yaml.
+
+    Used to inject OPENAI_BASE_URL + OPENAI_API_KEY into the process
+    environment so the auxiliary client (vision, title gen, etc.) can
+    resolve the bare ``custom`` provider to the correct endpoint.
+    """
+    try:
+        import yaml
+        cfg_path = Path(user_home) / "config.yaml"
+        if not cfg_path.is_file():
+            return ("", "")
+        with open(cfg_path) as f:
+            cfg = yaml.safe_load(f) or {}
+        # Check custom_providers list first
+        for entry in (cfg.get("custom_providers") or []):
+            if isinstance(entry, dict) and entry.get("base_url"):
+                return (
+                    str(entry["base_url"]).strip().rstrip("/"),
+                    str(entry.get("api_key") or "").strip(),
+                )
+        # Fallback: model.base_url
+        model = cfg.get("model") or {}
+        if isinstance(model, dict):
+            bu = str(model.get("base_url") or "").strip()
+            if bu:
+                return (bu.rstrip("/"), "")
+        return ("", "")
+    except Exception:
+        return ("", "")
 
 
 def _oauth_enabled() -> bool:

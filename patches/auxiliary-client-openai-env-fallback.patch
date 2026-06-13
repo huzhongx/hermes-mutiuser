@@ -1,0 +1,18 @@
+diff --git a/agent/auxiliary_client.py b/agent/auxiliary_client.py
+index c6e00340e..cd067e7bd 100644
+--- a/agent/auxiliary_client.py
++++ b/agent/auxiliary_client.py
+@@ -1838,6 +1838,13 @@ def _resolve_custom_runtime() -> Tuple[Optional[str], Optional[str], Optional[st
+     if base_url_host_matches(custom_base, "openrouter.ai"):
+         # requested='custom' falls back to OpenRouter when no custom endpoint is
+         # configured. Treat that as "no custom endpoint" for auxiliary routing.
++        # But first check if OPENAI_BASE_URL is set in the environment — the
++        # broker injects it so the auxiliary client can resolve the user's
++        # custom provider even when config's provider is "custom:<name>".
++        env_base = os.getenv("OPENAI_BASE_URL", "").strip().rstrip("/")
++        if env_base and not base_url_host_matches(env_base, "openrouter.ai"):
++            env_key = os.getenv("OPENAI_API_KEY", "").strip() or "no-key-required"
++            return env_base, env_key, None
+         return None, None, None
+ 
+     # Local servers (Ollama, llama.cpp, vLLM, LM Studio) don't require auth.
