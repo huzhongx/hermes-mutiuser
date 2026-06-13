@@ -1,0 +1,232 @@
+diff --git a/tools/mcp_oauth_manager.py b/tools/mcp_oauth_manager.py
+index 6a4573a86..db4d38ca1 100644
+--- a/tools/mcp_oauth_manager.py
++++ b/tools/mcp_oauth_manager.py
+@@ -36,13 +36,50 @@ from __future__ import annotations
+ 
+ import asyncio
+ import logging
++import os
+ import threading
+ from dataclasses import dataclass, field
+ from typing import Any, Optional
++from urllib.parse import urlparse
++
++import httpx
++from mcp.shared.auth import ProtectedResourceMetadata
+ 
+ logger = logging.getLogger(__name__)
+ 
+ 
++# ---------------------------------------------------------------------------
++# Protected Resource Metadata (PRM) pre-discovery
++# ---------------------------------------------------------------------------
++
++
++def _discover_prm_sync(server_url: str) -> Optional[ProtectedResourceMetadata]:
++    """Pre-fetch Protected Resource Metadata from the well-known endpoint.
++
++    Uses the BASE well-known URL only (no path suffix). Some servers
++    (Notion) serve different PRM at the path-specific URL — the path-
++    specific PRM has a resource value (e.g. ``https://mcp.notion.com/mcp``)
++    that the authorization server rejects. The base PRM has the canonical
++    resource (``https://mcp.notion.com``) that the authorization server
++    accepts.
++
++    The MCP SDK's runtime discovery will overwrite our pre-set PRM with
++    the path-specific one — we prevent this by overriding
++    ``context.get_resource_url`` to always return our pre-fetched value.
++    """
++    try:
++        parsed = urlparse(server_url)
++        well_known = f"{parsed.scheme}://{parsed.netloc}/.well-known/oauth-protected-resource"
++        with httpx.Client(timeout=5.0) as client:
++            resp = client.get(well_known)
++        if resp.status_code != 200:
++            return None
++        data = resp.json()
++        return ProtectedResourceMetadata.model_validate(data)
++    except Exception:
++        return None
++
++
+ # ---------------------------------------------------------------------------
+ # Per-server entry
+ # ---------------------------------------------------------------------------
+@@ -324,6 +361,80 @@ def _make_hermes_provider_class() -> Optional[type]:
+                 self._persist_oauth_metadata_if_changed()
+                 return
+ 
++        async def _handle_token_response(self, response):  # type: ignore[override]
++            """Handle token response, with form-encoded fallback.
++
++            Some OAuth servers (notably GitHub's ``/login/oauth/access_token``)
++            return ``application/x-www-form-urlencoded`` bodies when the
++            client omits ``Accept: application/json``.  The MCP SDK's
++            ``handle_token_response_scopes`` calls
++            ``OAuthToken.model_validate_json`` which fails on form data,
++            surfacing as ``Invalid token response: ... expected value at
++            line 1 column 1``.  We re-parse the body as
++            ``application/x-www-form-urlencoded`` and stash the dict back
++            on the response so the SDK's existing parser sees valid JSON.
++            """
++            try:
++                return await super()._handle_token_response(response)
++            except Exception as exc:
++                # Only fall back for "Invalid token response" / JSON-decode errors.
++                msg = str(exc)
++                if "Invalid token response" not in msg and "json_invalid" not in msg:
++                    raise
++                import json as _json
++                from urllib.parse import parse_qs
++                content = await response.aread()
++                # Detect: starts with "key=value&..." (form-urlencoded)
++                try:
++                    text = content.decode("utf-8") if isinstance(content, bytes) else content
++                except Exception:
++                    raise
++                if "=" not in text or text.lstrip().startswith("{"):
++                    raise  # Genuinely malformed, re-raise
++                # Parse form-encoded fields
++                fields = parse_qs(text, keep_blank_values=True)
++                # GitHub uses: access_token, token_type, scope
++                # Some providers add refresh_token, expires_in
++                if "access_token" not in fields:
++                    raise  # Not a token response, re-raise
++                token_json: dict = {
++                    "access_token": fields["access_token"][0],
++                    "token_type": fields.get("token_type", ["bearer"])[0],
++                }
++                if "scope" in fields:
++                    # GitHub returns space-separated scopes
++                    token_json["scope"] = fields["scope"][0]
++                if "refresh_token" in fields:
++                    token_json["refresh_token"] = fields["refresh_token"][0]
++                if "expires_in" in fields:
++                    try:
++                        token_json["expires_in"] = int(fields["expires_in"][0])
++                    except ValueError:
++                        pass
++                if "error" in fields:
++                    # Provider returned an error in form-encoded form
++                    raise Exception(
++                        f"Token exchange error: {fields['error'][0]} - "
++                        f"{fields.get('error_description', [''])[0]}"
++                    )
++                # Replace the response body with valid JSON so the SDK's
++                # normal parsing path can finish the job.
++                from mcp.shared.auth import OAuthToken
++                token_response = OAuthToken.model_validate(_json.dumps(token_json))
++                # Apply scope validation that the base class would have
++                # applied, but skip the JSON parse since we already have
++                # the validated token.
++                self.context.current_tokens = token_response
++                self.context.update_token_expiry(token_response)
++                await self.context.storage.set_tokens(token_response)
++                logger.info(
++                    "MCP OAuth '%s': parsed form-encoded token response "
++                    "(server doesn't return JSON; applied Accept-header "
++                    "workaround). scopes=%s",
++                    self._hermes_server_name,
++                    token_json.get("scope", "<unspecified>"),
++                )
++
+     return HermesMCPOAuthProvider
+ 
+ 
+@@ -413,8 +524,8 @@ class MCPOAuthManager:
+             _configure_callback_port,
+             _is_interactive,
+             _maybe_preregister_client,
+-            _redirect_handler,
+-            _wait_for_callback,
++            make_redirect_handler,
++            make_callback_handler,
+         )
+ 
+         if not _OAUTH_AVAILABLE:
+@@ -423,7 +534,10 @@ class MCPOAuthManager:
+         cfg = dict(entry.oauth_config or {})
+         storage = HermesTokenStorage(server_name)
+ 
+-        if not _is_interactive() and not storage.has_cached_tokens():
++        # In remote/broker mode (HERMES_NGINX_DOMAIN set), OAuth is completed via
++        # the user's browser through the nginx callback proxy — no local TTY needed.
++        nginx_domain = os.environ.get("HERMES_NGINX_DOMAIN", "")
++        if not _is_interactive() and not nginx_domain and not storage.has_cached_tokens():
+             logger.warning(
+                 "MCP OAuth for '%s': non-interactive environment and no "
+                 "cached tokens found. Run interactively first to complete "
+@@ -431,20 +545,68 @@ class MCPOAuthManager:
+                 server_name,
+             )
+ 
+-        _configure_callback_port(cfg)
++        _configure_callback_port(cfg, storage=storage)
++        port = cfg.get("_resolved_port")
+         client_metadata = _build_client_metadata(cfg)
+         _maybe_preregister_client(storage, cfg, client_metadata)
+ 
+-        return _HERMES_PROVIDER_CLS(
++        # Build per-provider closures that capture the resolved port and
++        # server name.  This avoids reading the module-level globals
++        # ``_oauth_port`` / ``_oauth_server_name`` which are shared across
++        # all providers and produce state pollution when multiple servers
++        # (e.g. Notion + GitHub) OAuth concurrently.
++        redirect_handler = make_redirect_handler(port, server_name)
++        callback_handler = make_callback_handler(port)
++
++        provider = _HERMES_PROVIDER_CLS(
+             server_name=server_name,
+             server_url=entry.server_url,
+             client_metadata=client_metadata,
+             storage=storage,
+-            redirect_handler=_redirect_handler,
+-            callback_handler=_wait_for_callback,
++            redirect_handler=redirect_handler,
++            callback_handler=callback_handler,
+             timeout=float(cfg.get("timeout", 300)),
+         )
+ 
++        # Pre-discover Protected Resource Metadata (PRM) and inject it into
++        # the provider context.  Some providers (e.g. Notion) require the
++        # `resource` parameter in authorize/token requests to match the
++        # canonical resource declared in PRM (not the full server_url).
++        # Without pre-discovery, the SDK falls back to deriving `resource`
++        # from `server_url` and the provider rejects with
++        # "invalid_target" / "invalid redirect_uri".
++        _prm = _discover_prm_sync(entry.server_url)
++        if _prm is not None and provider is not None:
++            try:
++                provider.context.protected_resource_metadata = _prm
++                logger.info(
++                    "MCP OAuth '%s': injected PRM resource=%s",
++                    server_name, _prm.resource,
++                )
++                # Lock the resource URL via instance attribute override
++                # so the SDK's runtime PRM discovery (which may return a
++                # different resource value the auth server rejects) cannot
++                # change the resource used in authorize/token requests.
++                _prm_resource_str = str(_prm.resource)
++                def _locked_get_resource_url(_self):
++                    return _prm_resource_str
++                import types
++                provider.context.get_resource_url = types.MethodType(
++                    _locked_get_resource_url, provider.context
++                )
++            except Exception as exc:
++                logger.debug(
++                    "MCP OAuth '%s': failed to inject PRM (non-fatal): %s",
++                    server_name, exc,
++                )
++        else:
++            logger.warning(
++                "MCP OAuth '%s': PRM discovery returned None for %s",
++                server_name, entry.server_url,
++            )
++
++        return provider
++
+     def remove(self, server_name: str) -> None:
+         """Evict the provider from cache AND delete tokens from disk.
+ 

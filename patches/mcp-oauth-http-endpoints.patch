@@ -1,0 +1,244 @@
+diff --git a/hermes_cli/web_server.py b/hermes_cli/web_server.py
+index 224003c59..bf02a0332 100644
+--- a/hermes_cli/web_server.py
++++ b/hermes_cli/web_server.py
+@@ -6012,6 +6012,49 @@ async def remove_mcp_server(name: str):
+ 
+     if not _remove_mcp_server(name):
+         raise HTTPException(status_code=404, detail=f"Server '{name}' not found")
++
++    # Disconnect at runtime (deregister tools, close transport)
++    try:
++        from tools.mcp_tool import disconnect_mcp_server
++        disconnect_mcp_server(name)
++    except Exception:
++        pass
++
++    # Clean up OAuth tokens if present
++    try:
++        from tools.mcp_oauth import remove_oauth_tokens
++        remove_oauth_tokens(name)
++    except Exception:
++        pass
++
++    # Clean up OAuth manager in-memory cache
++    try:
++        from tools.mcp_oauth_manager import get_manager
++        get_manager().remove(name)
++    except Exception:
++        pass
++
++    return {"ok": True}
++
++
++@app.post("/api/mcp/servers/{name}/oauth/revoke")
++async def revoke_mcp_oauth(name: str):
++    """Revoke OAuth authorization for an MCP server.
++
++    Clears stored OAuth tokens and in-memory caches so the server will
++    need re-authorization on next use. The server config is preserved.
++    """
++    try:
++        from tools.mcp_oauth import remove_oauth_tokens
++        remove_oauth_tokens(name)
++    except Exception:
++        pass
++    try:
++        from tools.mcp_oauth_manager import get_manager
++        get_manager().remove(name)
++    except Exception:
++        pass
++
+     return {"ok": True}
+ 
+ 
+@@ -6040,6 +6083,189 @@ async def test_mcp_server(name: str):
+     }
+ 
+ 
++# ── MCP OAuth endpoints ──────────────────────────────────────────
++
++
++@app.post("/api/mcp/servers/{name}/oauth/start")
++async def start_mcp_oauth(name: str):
++    """Initiate OAuth authorization for a remote user (Scenario A).
++
++    Clears cached tokens, triggers a background probe that invokes the
++    OAuth flow, waits for the authorization_url to become available, and
++    returns it directly so the frontend can open it in the user's browser.
++    """
++    from hermes_cli.mcp_config import _get_mcp_servers
++    from tools.mcp_oauth import (
++        HermesTokenStorage,
++        cleanup_expired_oauth_flows,
++        get_pending_oauth_authorization_url,
++    )
++
++    servers = _get_mcp_servers()
++    if name not in servers:
++        raise HTTPException(status_code=404, detail=f"Server '{name}' not found")
++
++    cfg = servers[name]
++    if cfg.get("auth") != "oauth":
++        raise HTTPException(status_code=400, detail=f"Server '{name}' does not use OAuth")
++
++    cleanup_expired_oauth_flows()
++
++    # Clear tokens to force fresh OAuth flow, but keep client.json so
++    # _configure_callback_port can reuse the previously registered
++    # redirect_uri port.  Without this, a new random port would be picked
++    # and the OAuth provider would reject it as "invalid redirect_uri".
++    storage = HermesTokenStorage(name)
++    # Remove only token file (not client.json which has the redirect_uri)
++    storage._tokens_path().unlink(missing_ok=True)
++    storage._meta_path().unlink(missing_ok=True)
++    try:
++        from tools.mcp_oauth_manager import get_manager
++        manager = get_manager()
++        with manager._entries_lock:
++            entry = manager._entries.get(name)
++            if entry is not None:
++                entry.provider = None
++    except Exception:
++        pass
++
++    import threading
++    _probe_result = {"status": "initiated", "server_name": name}
++    _probe_done = threading.Event()  # set when probe coroutine finishes (success or error)
++
++    # Pre-register client info if config has client_id (e.g. GitHub).  This
++    # ensures client.json exists on disk *before* the SDK tries to load it via
++    # _initialize().  Without this, the SDK falls through to DCR which GitHub
++    # doesn't support (404) and the flow dies before generating the
++    # authorization_url — leaving /oauth/start stuck polling for 30s.
++    try:
++        from tools.mcp_oauth import _maybe_preregister_client, _build_client_metadata, _configure_callback_port
++        pre_cfg = dict(cfg.get("oauth") or {})
++        _configure_callback_port(pre_cfg, storage=storage)
++        pre_metadata = _build_client_metadata(pre_cfg)
++        _maybe_preregister_client(storage, pre_cfg, pre_metadata)
++    except Exception:
++        pass  # best effort; if this fails the flow may still work
++
++    def _run_oauth_probe():
++        """Trigger the OAuth flow by connecting to the MCP server.
++
++        _connect_server → server returns 401 → httpx auth flow →
++        _redirect_handler(authorization_url) writes pending flow →
++        _wait_for_callback() blocks for up to 300s awaiting browser redirect.
++
++        The coroutine runs fire-and-forget on the MCP event loop so the
++        callback HTTP server stays alive to receive the provider redirect.
++        """
++        try:
++            import tools.mcp_tool
++            from hermes_cli.mcp_config import _resolve_mcp_server_config
++            import asyncio
++
++            tools.mcp_tool._ensure_mcp_loop()
++            with tools.mcp_tool._lock:
++                loop = tools.mcp_tool._mcp_loop
++
++            resolved_cfg = _resolve_mcp_server_config(cfg)
++
++            async def _connect_and_auth():
++                try:
++                    await tools.mcp_tool._connect_server(name, resolved_cfg)
++                except Exception as exc:
++                    _probe_result["status"] = "failed"
++                    _probe_result["error"] = str(exc)
++                finally:
++                    _probe_done.set()
++
++            future = asyncio.run_coroutine_threadsafe(_connect_and_auth(), loop)
++            # The coroutine may complete quickly (e.g. DCR 404) or block for
++            # 300s waiting for callback.  We set status here but the
++            # _connect_and_auth finally-block signals completion.
++            _probe_result["status"] = "redirect_triggered"
++        except Exception as exc:
++            _probe_result["status"] = "failed"
++            _probe_result["error"] = str(exc)
++            _probe_done.set()
++
++    thread = threading.Thread(target=_run_oauth_probe, daemon=True)
++    thread.start()
++
++    # Wait up to 30s for the authorization_url to appear in the pending flow.
++    # Also detect early probe failure (e.g. DCR 404) via _probe_done.
++    import time
++    deadline = time.time() + 30
++    while time.time() < deadline:
++        await asyncio.sleep(0.5)
++        pending = get_pending_oauth_authorization_url(server_name=name)
++        if pending:
++            return {
++                "status": "awaiting_callback",
++                "authorization_url": pending["authorization_url"],
++                "callback_port": pending["callback_port"],
++                "server_name": name,
++            }
++        # If the probe coroutine finished (success or error) and we still
++        # don't have a URL, it means the OAuth flow failed before reaching
++        # the redirect step.  No point polling further.
++        if _probe_done.is_set():
++            break
++        if _probe_result["status"] in ("failed",):
++            break
++
++    # Timeout or early failure
++    if _probe_result["status"] == "failed":
++        return {"status": "failed", "error": _probe_result.get("error", "OAuth flow failed"), "server_name": name}
++    return {"status": "timeout", "server_name": name}
++
++
++@app.get("/api/mcp/servers/{name}/oauth/status")
++async def get_mcp_oauth_status(name: str):
++    """Poll for OAuth flow status (Scenario A)."""
++    from tools.mcp_oauth import (
++        HermesTokenStorage,
++        get_pending_oauth_authorization_url,
++    )
++    from hermes_cli.mcp_config import _get_mcp_servers
++
++    if name not in _get_mcp_servers():
++        raise HTTPException(status_code=404, detail=f"Server '{name}' not found")
++
++    pending = get_pending_oauth_authorization_url(server_name=name)
++    if pending:
++        return {"status": "awaiting_callback"}
++
++    # The persistent callback handler flips the pending flow's status to
++    # ``completed`` (or ``failed``) the moment the browser redirect lands
++    # — well before the SDK finishes writing the token file.  Check that
++    # first so the UI doesn't have to wait on disk.
++    from tools import mcp_oauth as _mcp_oauth
++    with _mcp_oauth._pending_oauth_flows_lock:
++        for flow in _mcp_oauth._pending_oauth_flows.values():
++            if flow.get("server_name") != name:
++                continue
++            if flow.get("status") == "completed":
++                return {"status": "completed"}
++            if flow.get("status") == "failed":
++                return {"status": "failed", "error": flow.get("error")}
++
++    storage = HermesTokenStorage(name)
++    if storage.has_cached_tokens():
++        return {"status": "completed"}
++
++    # Check if the background probe finished
++    if _probe_result.get("server_name") == name:
++        if _probe_result["status"] == "completed":
++            return {"status": "completed"}
++        if _probe_result["status"] == "failed":
++            return {"status": "failed"}
++
++    return {"status": "in_progress"}
++
++
++# Module-level probe result shared between start and status endpoints.
++_probe_result: dict = {"status": "not_started"}
++
++
+ class MCPEnabledToggle(BaseModel):
+     enabled: bool
+ 

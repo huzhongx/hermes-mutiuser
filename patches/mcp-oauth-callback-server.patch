@@ -1,0 +1,570 @@
+diff --git a/tools/mcp_oauth.py b/tools/mcp_oauth.py
+index 832a6f594..04d20be76 100644
+--- a/tools/mcp_oauth.py
++++ b/tools/mcp_oauth.py
+@@ -92,11 +92,138 @@ class OAuthNonInteractiveError(RuntimeError):
+ # Port used by the most recent build_oauth_auth() call.  Exposed so that
+ # tests can verify the callback server and the redirect_uri share a port.
+ _oauth_port: int | None = None
++_oauth_server_name: str | None = None
+ 
+ 
+ # Skip tokens accepted at the paste prompt — exit OAuth without auth.
+ _SKIP_TOKENS = frozenset({"skip", "cancel", "s", "n", "no", "q", "quit"})
+ 
++# Pending OAuth flows for remote authorization URL delivery.
++# Keyed by callback port (unique per flow), stores the authorization_url
++# so the HTTP API can return it to the frontend.
++_pending_oauth_flows: dict[str, dict] = {}
++_pending_oauth_flows_lock = threading.Lock()
++
++
++# ---------------------------------------------------------------------------
++# Persistent OAuth callback server
++# ---------------------------------------------------------------------------
++# Why a persistent server? The previous design started a fresh
++# ``HTTPServer`` + ``handle_request()`` thread inside every
++# ``_wait_for_callback`` call. Each server handled exactly one request, then
++# the thread exited while the listening socket stayed bound in
++# ``CLOSE_WAIT``/``TIME_WAIT`` state. When a new OAuth flow started before
++# the old socket fully drained, ``bind()`` raised ``OSError: [Errno 98]
++# Address already in use`` and the flow died with
++# ``OAuthNonInteractiveError`` before the user could ever click the
++# authorize link — leaving the chat stuck on ``awaiting_callback`` and the
++# user seeing nginx ``502``/``504`` errors.
++#
++# The fix: one long-lived ``serve_forever()`` thread per callback port.
++# Each new flow installs its own ``current_result`` dict; the handler
++# writes to whichever dict is currently active and the waiter polls it.
++# Servers are never restarted within a process lifetime — they exit only
++# when the process does (daemon thread).
++
++_callback_servers: dict[int, dict] = {}  # port -> entry dict
++_callback_servers_lock = threading.Lock()
++
++
++def _get_or_create_callback_server(port: int) -> dict:
++    """Return (and lazily start) the persistent callback server for *port*.
++
++    The returned entry contains:
++      * ``server`` — the ``HTTPServer`` instance
++      * ``thread`` — daemon thread running ``serve_forever``
++      * ``current_result`` — mutable dict shared between the HTTP handler
++        and the awaiting flow's ``_wait_for_callback`` coroutine
++      * ``lock`` — guards mutations of ``current_result``
++    """
++    with _callback_servers_lock:
++        existing = _callback_servers.get(port)
++        if existing is not None:
++            return existing
++
++        result: dict = {"auth_code": None, "state": None, "error": None}
++        lock = threading.Lock()
++
++        class _PersistentCallbackHandler(BaseHTTPRequestHandler):
++            def do_GET(self) -> None:  # noqa: N802
++                params = parse_qs(urlparse(self.path).query)
++                code = params.get("code", [None])[0]
++                state = params.get("state", [None])[0]
++                error = params.get("error", [None])[0]
++
++                with lock:
++                    cur = result
++                    if cur is not None:
++                        cur["auth_code"] = code
++                        cur["state"] = state
++                        cur["error"] = error
++
++                # Reflect the callback arrival in the pending-flows dict so
++                # the HTTP status endpoint reports ``completed`` (or
++                # ``failed``) instead of leaving the flow stuck on
++                # ``awaiting_callback`` for the rest of its TTL.
++                if code:
++                    mark_oauth_flow_completed(port)
++                elif error:
++                    mark_oauth_flow_failed(port, error)
++
++                body = (
++                    "<html><body><h2>Authorization Successful</h2>"
++                    "<p>You can close this tab and return to Hermes.</p></body></html>"
++                ) if code else (
++                    "<html><body><h2>Authorization Failed</h2>"
++                    f"<p>Error: {error or 'unknown'}</p></body></html>"
++                )
++                self.send_response(200)
++                self.send_header("Content-Type", "text/html; charset=utf-8")
++                self.end_headers()
++                self.wfile.write(body.encode())
++
++            def log_message(self, fmt: str, *args: Any) -> None:  # noqa: N802
++                logger.debug("OAuth callback: %s", fmt % args)
++
++        server = HTTPServer(("127.0.0.1", port), _PersistentCallbackHandler)
++        # SO_REUSEADDR lets a fresh flow rebind quickly even if a previous
++        # incarnation is still draining in TIME_WAIT.
++        server.allow_reuse_address = True
++        server.daemon_threads = True
++        thread = threading.Thread(
++            target=server.serve_forever,
++            daemon=True,
++            name=f"oauth-callback-{port}",
++        )
++        thread.start()
++
++        entry = {
++            "server": server,
++            "thread": thread,
++            "current_result": result,
++            "lock": lock,
++        }
++        _callback_servers[port] = entry
++        logger.info("Started persistent OAuth callback server on port %d", port)
++        return entry
++
++
++def _reset_callback_result(port: int) -> dict:
++    """Reset the persistent server's result dict for a fresh OAuth flow.
++
++    Returns the cleared dict so the caller can poll it directly without an
++    extra lock acquisition.
++    """
++    entry = _callback_servers.get(port)
++    if entry is None:
++        return {"auth_code": None, "state": None, "error": None}
++    with entry["lock"]:
++        entry["current_result"]["auth_code"] = None
++        entry["current_result"]["state"] = None
++        entry["current_result"]["error"] = None
++        return entry["current_result"]
++
++
+ # Sentinel value written to result["error"] when the user skipped via stdin.
+ # _wait_for_callback maps this to OAuthNonInteractiveError ("user_skipped")
+ # so the MCP setup path treats it as a non-fatal "continue without this
+@@ -402,7 +529,32 @@ async def _redirect_handler(authorization_url: str) -> None:
+ 
+     Opens the browser automatically when possible; always prints the URL
+     as a fallback for headless/SSH/gateway environments.
++
++    For remote/broker mode, also stores the URL in the pending flows dict
++    so the HTTP API endpoint can deliver it to the frontend.
++
++    NOTE: This function reads module-level globals ``_oauth_port`` and
++    ``_oauth_server_name``.  When multiple OAuth providers exist concurrently,
++    callers should use ``make_redirect_handler()`` instead, which closes over
++    the correct per-server values and avoids state pollution.
+     """
++    # Capture for remote delivery (Scenario A: UI-initiated, Scenario B: passive)
++    if _oauth_port is not None:
++        flow_id = f"flow-{_oauth_port}"
++        with _pending_oauth_flows_lock:
++            _pending_oauth_flows[flow_id] = {
++                "authorization_url": authorization_url,
++                "callback_port": _oauth_port,
++                "status": "awaiting_callback",
++                "server_name": _oauth_server_name,
++                "created_at": time.time(),
++            }
++
++    _print_oauth_url(authorization_url, _oauth_port)
++
++
++def _print_oauth_url(authorization_url: str, port: int | None) -> None:
++    """Print the OAuth URL to stderr with SSH / browser hints."""
+     msg = (
+         f"\n  MCP OAuth: authorization required.\n"
+         f"  Open this URL in your browser:\n\n"
+@@ -410,16 +562,10 @@ async def _redirect_handler(authorization_url: str) -> None:
+     )
+     print(msg, file=sys.stderr)
+ 
+-    # On a remote SSH session the OAuth provider redirects to
+-    # http://127.0.0.1:<port>/callback, which reaches the callback server on
+-    # the *remote* machine — not the user's local machine where the browser
+-    # opened.  Two ways out: paste the redirect URL back (default fallback,
+-    # offered by _wait_for_callback on interactive TTYs), or set up an SSH
+-    # port forward so the redirect tunnels through.
+-    if _oauth_port and (os.getenv("SSH_CLIENT") or os.getenv("SSH_TTY")):
++    if port and (os.getenv("SSH_CLIENT") or os.getenv("SSH_TTY")):
+         print(
+             f"  Remote session detected. After you authorize, the provider redirects to\n"
+-            f"    http://127.0.0.1:{_oauth_port}/callback\n"
++            f"    http://127.0.0.1:{port}/callback\n"
+             f"  which only the listener on THIS machine can receive. Two options:\n"
+             f"\n"
+             f"    1. Easiest — when your browser shows a connection error after\n"
+@@ -428,7 +574,7 @@ async def _redirect_handler(authorization_url: str) -> None:
+             f"       enough to complete the flow.\n"
+             f"\n"
+             f"    2. Or forward the port first in a separate terminal:\n"
+-            f"         ssh -N -L {_oauth_port}:127.0.0.1:{_oauth_port} <user>@<this-host>\n"
++            f"         ssh -N -L {port}:127.0.0.1:{port} <user>@<this-host>\n"
+             f"       then open the URL above and let it redirect normally.\n"
+             f"\n"
+             f"  See: https://hermes-agent.nousresearch.com/docs/guides/oauth-over-ssh\n",
+@@ -448,12 +594,59 @@ async def _redirect_handler(authorization_url: str) -> None:
+         print("  (Headless environment detected — open the URL manually.)\n", file=sys.stderr)
+ 
+ 
++def make_redirect_handler(port: int, server_name: str):
++    """Return a per-server redirect handler that closes over *port* and *server_name*.
++
++    Avoids reading the module-level ``_oauth_port`` / ``_oauth_server_name``
++    globals, which are racy when multiple OAuth providers exist concurrently.
++    """
++    async def _handler(authorization_url: str) -> None:
++        flow_id = f"flow-{port}"
++        with _pending_oauth_flows_lock:
++            _pending_oauth_flows[flow_id] = {
++                "authorization_url": authorization_url,
++                "callback_port": port,
++                "status": "awaiting_callback",
++                "server_name": server_name,
++                "created_at": time.time(),
++            }
++        _print_oauth_url(authorization_url, port)
++
++    return _handler
++
++
++def make_callback_handler(port: int):
++    """Return a per-server callback handler that closes over *port*.
++
++    Avoids reading the module-level ``_oauth_port`` global, which is racy
++    when multiple OAuth providers exist concurrently.
++    """
++    async def _handler() -> tuple[str, str | None]:
++        return await _wait_for_callback_on_port(port)
++
++    return _handler
++
++
+ async def _wait_for_callback() -> tuple[str, str | None]:
++    """Wait for the OAuth callback using the module-level ``_oauth_port``.
++
++    Legacy wrapper kept for backwards compatibility with callers that use
++    ``build_oauth_auth()`` directly.  New code should use
++    ``make_callback_handler(port)`` instead to avoid global-state races.
++    """
++    if _oauth_port is None:
++        raise RuntimeError(
++            "OAuth callback port not set — build_oauth_auth must be called "
++            "before _wait_for_oauth_callback"
++        )
++    return await _wait_for_callback_on_port(_oauth_port)
++
++
++async def _wait_for_callback_on_port(port: int) -> tuple[str, str | None]:
+     """Wait for the OAuth callback to arrive on the local callback server.
+ 
+-    Uses the module-level ``_oauth_port`` which is set by ``build_oauth_auth``
+-    before this is ever called.  Polls for the result without blocking the
+-    event loop.
++    Uses the persistent callback server for *port*.  Polls for the result
++    without blocking the event loop.
+ 
+     On an interactive TTY, races the HTTP listener against a stdin paste
+     fallback so users without an SSH tunnel can copy the redirect URL (or
+@@ -464,33 +657,10 @@ async def _wait_for_callback() -> tuple[str, str | None]:
+     Raises:
+         OAuthNonInteractiveError: If the callback times out (no user present
+             to complete the browser auth).
+-        RuntimeError: If ``_oauth_port`` has not been set, which would indicate
+-            that ``build_oauth_auth`` was skipped — the asserting form below
+-            was a silent bug when running Python with ``-O``/``-OO``.
+     """
+-    if _oauth_port is None:
+-        raise RuntimeError(
+-            "OAuth callback port not set — build_oauth_auth must be called "
+-            "before _wait_for_oauth_callback"
+-        )
+-
+-    # The callback server is already running (started in build_oauth_auth).
+-    # We just need to poll for the result.
+-    handler_cls, result = _make_callback_handler()
+-
+-    # Start a temporary server on the known port
+-    try:
+-        server = HTTPServer(("127.0.0.1", _oauth_port), handler_cls)
+-    except OSError:
+-        # Port already in use — the server from build_oauth_auth is running.
+-        # Fall back to polling the server started by build_oauth_auth.
+-        raise OAuthNonInteractiveError(
+-            "OAuth callback timed out — could not bind callback port. "
+-            "Complete the authorization in a browser first, then retry."
+-        )
+-
+-    server_thread = threading.Thread(target=server.handle_request, daemon=True)
+-    server_thread.start()
++    entry = _get_or_create_callback_server(port)
++    result = _reset_callback_result(port)
++    lock = entry["lock"]
+ 
+     # Optional paste-fallback thread: only on interactive TTYs. Reads one
+     # line from stdin and writes the parsed code/state into the shared
+@@ -506,7 +676,7 @@ async def _wait_for_callback() -> tuple[str, str | None]:
+             flush=True,
+         )
+         paste_thread = threading.Thread(
+-            target=_paste_callback_reader, args=(result,), daemon=True
++            target=_paste_callback_reader, args=(result, lock, port), daemon=True
+         )
+         paste_thread.start()
+ 
+@@ -515,12 +685,15 @@ async def _wait_for_callback() -> tuple[str, str | None]:
+     elapsed = 0.0
+     try:
+         while elapsed < timeout:
+-            if result["auth_code"] is not None or result["error"] is not None:
++            with lock:
++                done = result["auth_code"] is not None or result["error"] is not None
++            if done:
+                 break
+             await asyncio.sleep(poll_interval)
+             elapsed += poll_interval
+     finally:
+-        server.server_close()
++        # Server stays alive for the next flow; do NOT close it here.
++        pass
+ 
+     if result["error"] == _USER_SKIPPED_SENTINEL:
+         raise OAuthNonInteractiveError("user_skipped")
+@@ -535,7 +708,7 @@ async def _wait_for_callback() -> tuple[str, str | None]:
+     return result["auth_code"], result["state"]
+ 
+ 
+-def _paste_callback_reader(result: dict) -> None:
++def _paste_callback_reader(result: dict, lock: threading.Lock, port: int | None = None) -> None:
+     """Read one line from stdin, parse it as an OAuth redirect, write to result.
+ 
+     Accepts any of:
+@@ -560,8 +733,12 @@ def _paste_callback_reader(result: dict) -> None:
+     if not line:
+         return
+ 
++    def _has_result() -> bool:
++        with lock:
++            return result.get("auth_code") is not None or result.get("error") is not None
++
+     # Skip if HTTP listener already won.
+-    if result.get("auth_code") is not None or result.get("error") is not None:
++    if _has_result():
+         return
+ 
+     # Skip token: user explicitly opted out of authorization. Mark the
+@@ -569,9 +746,10 @@ def _paste_callback_reader(result: dict) -> None:
+     # to OAuthNonInteractiveError (already handled by mcp_tool.py as a
+     # non-fatal "skip this server and continue startup" path).
+     if line.lower() in _SKIP_TOKENS:
+-        if result.get("auth_code") is not None or result.get("error") is not None:
++        if _has_result():
+             return
+-        result["error"] = _USER_SKIPPED_SENTINEL
++        with lock:
++            result["error"] = _USER_SKIPPED_SENTINEL
+         print(
+             "  OAuth skipped. Run `hermes mcp login <server>` later to "
+             "authenticate, or set ``enabled: false`` on that server in "
+@@ -609,14 +787,77 @@ def _paste_callback_reader(result: dict) -> None:
+         return
+ 
+     # One more race-check before writing.
+-    if result.get("auth_code") is not None or result.get("error") is not None:
++    if _has_result():
+         return
+ 
+-    result["auth_code"] = code
+-    result["state"] = state
+-    result["error"] = error
++    with lock:
++        result["auth_code"] = code
++        result["state"] = state
++        result["error"] = error
+     if code:
+         print("  Got authorization code from paste — completing flow.", file=sys.stderr)
++        # Use explicit port if given; otherwise fall back to module global
++        # so legacy callers (which only set _oauth_port) still work.
++        effective_port = port if port is not None else _oauth_port
++        if effective_port is not None:
++            mark_oauth_flow_completed(effective_port)
++
++
++# ---------------------------------------------------------------------------
++# Public API — pending flow accessors
++# ---------------------------------------------------------------------------
++
++
++def get_pending_oauth_authorization_url(server_name: str | None = None) -> dict | None:
++    """Return the most recent pending OAuth flow's authorization URL.
++
++    Called by the HTTP API endpoint (Scenario A polling) and by
++    _handle_auth_error_and_retry (Scenario B).
++
++    If *server_name* is given, only return flows for that server.
++    """
++    with _pending_oauth_flows_lock:
++        for fid, flow in sorted(
++            _pending_oauth_flows.items(), key=lambda x: x[1].get("created_at", 0), reverse=True
++        ):
++            if flow.get("status") == "awaiting_callback":
++                if server_name and flow.get("server_name") != server_name:
++                    continue
++                return {
++                    "authorization_url": flow["authorization_url"],
++                    "callback_port": flow["callback_port"],
++                    "flow_id": fid,
++                }
++        return None
++
++
++def mark_oauth_flow_completed(callback_port: int) -> None:
++    """Mark an OAuth flow as completed (called after successful token save)."""
++    flow_id = f"flow-{callback_port}"
++    with _pending_oauth_flows_lock:
++        if flow_id in _pending_oauth_flows:
++            _pending_oauth_flows[flow_id]["status"] = "completed"
++
++
++def mark_oauth_flow_failed(callback_port: int, error: str) -> None:
++    """Mark an OAuth flow as failed (callback arrived with ``?error=...``)."""
++    flow_id = f"flow-{callback_port}"
++    with _pending_oauth_flows_lock:
++        if flow_id in _pending_oauth_flows:
++            _pending_oauth_flows[flow_id]["status"] = "failed"
++            _pending_oauth_flows[flow_id]["error"] = error
++
++
++def cleanup_expired_oauth_flows(max_age: float = 600) -> None:
++    """Remove expired OAuth flows from the pending dict."""
++    now = time.time()
++    with _pending_oauth_flows_lock:
++        expired = [
++            fid for fid, flow in _pending_oauth_flows.items()
++            if now - flow.get("created_at", 0) > max_age
++        ]
++        for fid in expired:
++            del _pending_oauth_flows[fid]
+ 
+ 
+ # ---------------------------------------------------------------------------
+@@ -640,27 +881,67 @@ def remove_oauth_tokens(server_name: str) -> None:
+ # ---------------------------------------------------------------------------
+ 
+ 
+-def _configure_callback_port(cfg: dict) -> int:
++def _configure_callback_port(cfg: dict, storage: "HermesTokenStorage | None" = None) -> int:
+     """Pick or validate the OAuth callback port.
+ 
++    When ``redirect_port`` is 0 (auto) and a cached ``*.client.json``
++    exists, reuse the port from the previous DCR registration so the
++    redirect_uri stays consistent across OAuth flows.  This prevents
++    "invalid redirect_uri" errors from OAuth providers like Notion that
++    bind the redirect_uri at client-registration time.
++
+     Stores the resolved port into ``cfg['_resolved_port']`` so sibling
+     helpers (and the manager) can read it from the same dict. Returns the
+     resolved port.
+-
+-    NOTE: also sets the legacy module-level ``_oauth_port`` so existing
+-    calls to ``_wait_for_callback`` keep working. The legacy global is
+-    the root cause of issue #5344 (port collision on concurrent OAuth
+-    flows); replacing it with a ContextVar is out of scope for this
+-    consolidation PR.
+     """
+     global _oauth_port
+     requested = int(cfg.get("redirect_port", 0))
++    if requested == 0 and storage is not None:
++        # Try to reuse the port from a previous DCR registration
++        cached_port = _port_from_cached_client(storage)
++        if cached_port is not None:
++            requested = cached_port
+     port = _find_free_port() if requested == 0 else requested
+     cfg["_resolved_port"] = port
+     _oauth_port = port  # legacy consumer: _wait_for_callback reads this
+     return port
+ 
+ 
++def _port_from_cached_client(storage: "HermesTokenStorage") -> int | None:
++    """Extract the callback port from a cached client.json redirect_uri.
++
++    Returns None if no client info is cached or the URI doesn't match
++    the expected pattern.
++    """
++    import json as _json
++    try:
++        client_path = storage._client_info_path()
++        if not client_path.exists():
++            return None
++        data = _json.loads(client_path.read_text())
++        uris = data.get("redirect_uris")
++        if not uris:
++            return None
++        uri = uris[0]
++        # Extract port from the last segment: .../callback or :{port}/callback
++        from urllib.parse import urlparse
++        parsed = urlparse(uri)
++        # path is like /hermes/mcp-oauth-cb/59849/callback
++        parts = parsed.path.rstrip("/").split("/")
++        # Walk backwards to find a numeric segment
++        for part in reversed(parts):
++            if part.isdigit():
++                port = int(part)
++                if 1024 < port < 65536:
++                    return port
++        # Fallback: use the URL's port (for localhost URIs)
++        if parsed.port:
++            return parsed.port
++    except Exception:
++        pass
++    return None
++
++
+ def _build_client_metadata(cfg: dict) -> "OAuthClientMetadata":
+     """Build OAuthClientMetadata from the oauth config dict.
+ 
+@@ -674,7 +955,12 @@ def _build_client_metadata(cfg: dict) -> "OAuthClientMetadata":
+         )
+     client_name = cfg.get("client_name", "Hermes Agent")
+     scope = cfg.get("scope")
+-    redirect_uri = f"http://127.0.0.1:{port}/callback"
++    # Remote/broker mode: construct public callback URL via nginx proxy
++    nginx_domain = os.environ.get("HERMES_NGINX_DOMAIN", "")
++    if nginx_domain:
++        redirect_uri = f"https://{nginx_domain}/hermes/mcp-oauth-cb/{port}/callback"
++    else:
++        redirect_uri = f"http://127.0.0.1:{port}/callback"
+ 
+     metadata_kwargs: dict[str, Any] = {
+         "client_name": client_name,
+@@ -700,8 +986,8 @@ def _maybe_preregister_client(
+     client_id = cfg.get("client_id")
+     if not client_id:
+         return
+-    port = cfg["_resolved_port"]
+-    redirect_uri = f"http://127.0.0.1:{port}/callback"
++    # Use redirect_uri from client_metadata (already has public URL if configured)
++    redirect_uri = str(client_metadata.redirect_uris[0])
+ 
+     info_dict: dict[str, Any] = {
+         "client_id": client_id,
+@@ -753,7 +1039,10 @@ def build_oauth_auth(
+     cfg = dict(oauth_config or {})  # copy — we mutate _resolved_port
+     storage = HermesTokenStorage(server_name)
+ 
+-    if not _is_interactive() and not storage.has_cached_tokens():
++    # In remote/broker mode (HERMES_NGINX_DOMAIN set), OAuth is completed via
++    # the user's browser through the nginx callback proxy — no local TTY needed.
++    nginx_domain = os.environ.get("HERMES_NGINX_DOMAIN", "")
++    if not _is_interactive() and not nginx_domain and not storage.has_cached_tokens():
+         logger.warning(
+             "MCP OAuth for '%s': non-interactive environment and no cached tokens "
+             "found. The OAuth flow requires browser authorization. Run "
+@@ -762,7 +1051,7 @@ def build_oauth_auth(
+             server_name,
+         )
+ 
+-    _configure_callback_port(cfg)
++    _configure_callback_port(cfg, storage=storage)
+     client_metadata = _build_client_metadata(cfg)
+     _maybe_preregister_client(storage, cfg, client_metadata)
+ 

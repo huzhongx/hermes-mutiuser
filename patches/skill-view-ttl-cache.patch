@@ -1,0 +1,196 @@
+diff --git a/tools/skills_tool.py b/tools/skills_tool.py
+index 48274ccfe..718d0dec9 100644
+--- a/tools/skills_tool.py
++++ b/tools/skills_tool.py
+@@ -72,6 +72,7 @@ import logging
+ from hermes_constants import get_hermes_home, display_hermes_home
+ import os
+ import re
++import time
+ from enum import Enum
+ from pathlib import Path, PurePosixPath, PureWindowsPath
+ from typing import Dict, Any, List, Optional, Set, Tuple
+@@ -107,6 +108,32 @@ _REMOTE_ENV_BACKENDS = frozenset(
+ )
+ _secret_capture_callback = None
+ 
++# ── TTL cache for skill_view ──────────────────────────────────────────────
++# Avoids redundant full-content reloads within a single Hermes process.
++# Key: "name\tfile_path", Value: (monotonic_timestamp, full_result_json).
++# On cache hit, a compact "already loaded" hint is returned instead of the
++# full skill content, saving ~8-28K chars per duplicate call.
++_SKILL_VIEW_CACHE_TTL = 600.0          # 10 minutes
++_skill_view_cache: dict[str, tuple[float, str]] = {}
++_skill_view_cache_lock = threading.Lock()
++
++
++def skill_view_cache_invalidate(name: str = None):
++    """Invalidate the skill_view TTL cache.
++
++    Args:
++        name: If given, remove entries for that skill only (any file_path).
++              If None, clear the entire cache.
++    """
++    with _skill_view_cache_lock:
++        if name is None:
++            _skill_view_cache.clear()
++        else:
++            prefix = f"{name}\t"
++            keys_to_remove = [k for k in _skill_view_cache if k.startswith(prefix)]
++            for k in keys_to_remove:
++                del _skill_view_cache[k]
++
+ 
+ def _skill_lookup_path_error(name: str) -> Optional[str]:
+     """Return an error if a local skill lookup *name* can escape search roots.
+@@ -1097,6 +1124,10 @@ def skill_view(
+         # (local skills dir + configured external_dirs are all trusted)
+         _outside_skills_dir = True
+         _trusted_dirs = [SKILLS_DIR.resolve()]
++        # Also trust the global skills directory (symlinked from broker)
++        _global_skills = Path("/root/.hermes/skills")
++        if _global_skills.is_dir() and _global_skills not in _trusted_dirs:
++            _trusted_dirs.append(_global_skills.resolve())
+         try:
+             _trusted_dirs.extend(d.resolve() for d in all_dirs[1:])
+         except Exception:
+@@ -1568,11 +1599,52 @@ registry.register(
+ )
+ def _skill_view_with_bump(args, **kw):
+     """Invoke skill_view, then bump view_count on success. Best-effort: a
+-    telemetry failure never breaks the tool call."""
++    telemetry failure never breaks the tool call.
++
++    Includes a TTL cache: if the same skill was already loaded within
++    ``_SKILL_VIEW_CACHE_TTL`` seconds, returns a compact "already loaded"
++    hint instead of the full content, saving ~8-28K chars per call.
++    """
+     name = args.get("name", "")
++    file_path = args.get("file_path") or ""
++    cache_key = f"{name}\t{file_path}"
++    now = time.monotonic()
++
++    # ── TTL cache check ────────────────────────────────────────────────
++    with _skill_view_cache_lock:
++        cached = _skill_view_cache.get(cache_key)
++        if cached is not None:
++            ts, cached_result = cached
++            if now - ts < _SKILL_VIEW_CACHE_TTL:
++                # Return compact "already loaded" hint instead of full content
++                try:
++                    parsed = json.loads(cached_result)
++                    skill_name = parsed.get("name", name)
++                    desc = parsed.get("description", "")
++                except Exception:
++                    skill_name = name
++                    desc = ""
++                logger.debug("skill_view cache hit: %s", cache_key)
++                return json.dumps({
++                    "success": True,
++                    "name": skill_name,
++                    "description": desc,
++                    "cached": True,
++                    "hint": (
++                        f"Skill '{skill_name}' was already loaded earlier in this "
++                        f"conversation. The full content is in your conversation "
++                        f"history. Do NOT call skill_view again for this skill."
++                    ),
++                    "tags": parsed.get("tags", []),
++                    "linked_files": parsed.get("linked_files"),
++                }, ensure_ascii=False)
++
++    # Cache miss — call original skill_view
+     result = skill_view(
+         name, file_path=args.get("file_path"), task_id=kw.get("task_id")
+     )
++
++    # Cache successful results and bump telemetry
+     try:
+         parsed = json.loads(result)
+         if isinstance(parsed, dict) and parsed.get("success"):
+@@ -1582,10 +1654,9 @@ def _skill_view_with_bump(args, **kw):
+             if resolved:
+                 from tools.skill_usage import bump_use, bump_view
+                 bump_view(str(resolved))
+-                # A skill_view tool call is the agent actively loading the skill
+-                # to act on it — that counts as use, not just a browse/view.
+-                # Curator's stale timer keys off last_used_at (see agent/curator.py).
+                 bump_use(str(resolved))
++            with _skill_view_cache_lock:
++                _skill_view_cache[cache_key] = (now, result)
+     except Exception:
+         pass
+     return result
+diff --git a/agent/prompt_builder.py b/agent/prompt_builder.py
+index 26fcfaae3..beceaeffd 100644
+--- a/agent/prompt_builder.py
++++ b/agent/prompt_builder.py
+@@ -1289,6 +1289,9 @@ def build_skills_system_prompt(
+             "Skills also encode the user's preferred approach, conventions, and quality standards "
+             "for tasks like code review, planning, and testing — load them even for tasks you "
+             "already know how to do, because the skill defines how it should be done here.\n"
++            "If skill_view returns \"cached\": true, the skill was already loaded earlier in this "
++            "conversation — do NOT call skill_view on it again. The full content is in your "
++            "conversation history. Re-loading wastes tokens and time.\n"
+             "Whenever the user asks you to configure, set up, install, enable, disable, modify, "
+             "or troubleshoot Hermes Agent itself — its CLI, config, models, providers, tools, "
+             "skills, voice, gateway, plugins, or any feature — load the `hermes-agent` skill "
+diff --git a/tools/skill_manager_tool.py b/tools/skill_manager_tool.py
+index c131db9d5..256116fb2 100644
+--- a/tools/skill_manager_tool.py
++++ b/tools/skill_manager_tool.py
+@@ -282,14 +282,17 @@ def _find_skill(name: str) -> Optional[Dict[str, Any]]:
+     Searches the local skills dir (~/.hermes/skills/) first, then any
+     external dirs configured via skills.external_dirs.  Returns
+     {"path": Path} or None.
++
++    Uses ``iter_skill_index_files`` (``os.walk(followlinks=True)``) instead
++    of ``Path.rglob`` because Python 3.12's rglob does not follow symlink
++    directories.  When skills are symlinked into the user's skills/ dir
++    (common in multi-user deployments), rglob silently skips them.
+     """
+-    from agent.skill_utils import get_all_skills_dirs, is_excluded_skill_path
++    from agent.skill_utils import get_all_skills_dirs, iter_skill_index_files
+     for skills_dir in get_all_skills_dirs():
+         if not skills_dir.exists():
+             continue
+-        for skill_md in skills_dir.rglob("SKILL.md"):
+-            if is_excluded_skill_path(skill_md):
+-                continue
++        for skill_md in iter_skill_index_files(skills_dir, "SKILL.md"):
+             if skill_md.parent.name == name:
+                 return {"path": skill_md.parent}
+     return None
+@@ -307,7 +310,7 @@ def _find_skill_in_other_profiles(name: str) -> List[Tuple[str, Path]]:
+     matches: List[Tuple[str, Path]] = []
+     try:
+         from hermes_constants import get_default_hermes_root
+-        from agent.skill_utils import is_excluded_skill_path
++        from agent.skill_utils import is_excluded_skill_path, iter_skill_index_files
+     except Exception:
+         return matches
+ 
+@@ -350,9 +353,7 @@ def _find_skill_in_other_profiles(name: str) -> List[Tuple[str, Path]]:
+         if not skills_dir.is_dir():
+             continue
+         try:
+-            for skill_md in skills_dir.rglob("SKILL.md"):
+-                if is_excluded_skill_path(skill_md):
+-                    continue
++            for skill_md in iter_skill_index_files(skills_dir, "SKILL.md"):
+                 if skill_md.parent.name == name:
+                     matches.append((profile_name, skill_md.parent))
+                     break  # one match per profile is enough
+@@ -880,6 +881,12 @@ def skill_manage(
+             clear_skills_system_prompt_cache(clear_snapshot=True)
+         except Exception:
+             pass
++        # Invalidate skill_view TTL cache so next view returns fresh content
++        try:
++            from tools.skills_tool import skill_view_cache_invalidate
++            skill_view_cache_invalidate(name)
++        except Exception:
++            pass
+         # Curator telemetry: bump patch_count on edit/patch/write_file (the actions
+         # that mutate an existing skill's guidance), drop the record on delete.
+         # Only mark a skill as agent-created when the background self-improvement
