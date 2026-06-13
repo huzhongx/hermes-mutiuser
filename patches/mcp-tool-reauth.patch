@@ -1,8 +1,8 @@
 diff --git a/tools/mcp_tool.py b/tools/mcp_tool.py
-index 5c3c46c4d..ce54ba8a1 100644
+index 0cc4907ea..51c740d88 100644
 --- a/tools/mcp_tool.py
 +++ b/tools/mcp_tool.py
-@@ -2727,11 +2727,32 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
+@@ -2861,11 +2861,32 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
                  "MCP tool %s/%s call failed: %s",
                  server_name, tool_name, exc,
              )
@@ -39,7 +39,7 @@ index 5c3c46c4d..ce54ba8a1 100644
  
      return _handler
  
-@@ -3811,6 +3832,48 @@ def shutdown_mcp_servers():
+@@ -3992,6 +4013,48 @@ def shutdown_mcp_servers():
      _stop_mcp_loop()
  
  

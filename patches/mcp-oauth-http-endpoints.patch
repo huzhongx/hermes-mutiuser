@@ -1,10 +1,10 @@
 diff --git a/hermes_cli/web_server.py b/hermes_cli/web_server.py
-index 224003c59..bf02a0332 100644
+index 32a8fc67a..2f8e7ed90 100644
 --- a/hermes_cli/web_server.py
 +++ b/hermes_cli/web_server.py
-@@ -6012,6 +6012,49 @@ async def remove_mcp_server(name: str):
- 
-     if not _remove_mcp_server(name):
+@@ -7093,6 +7093,49 @@ async def remove_mcp_server(name: str, profile: Optional[str] = None):
+         removed = _remove_mcp_server(name)
+     if not removed:
          raise HTTPException(status_code=404, detail=f"Server '{name}' not found")
 +
 +    # Disconnect at runtime (deregister tools, close transport)
@@ -52,7 +52,7 @@ index 224003c59..bf02a0332 100644
      return {"ok": True}
  
  
-@@ -6040,6 +6083,189 @@ async def test_mcp_server(name: str):
+@@ -7136,6 +7179,189 @@ async def test_mcp_server(name: str, profile: Optional[str] = None):
      }
  
  
@@ -241,4 +241,4 @@ index 224003c59..bf02a0332 100644
 +
  class MCPEnabledToggle(BaseModel):
      enabled: bool
- 
+     profile: Optional[str] = None
