@@ -1,0 +1,47 @@
+diff --git a/hermes_cli/mcp_config.py b/hermes_cli/mcp_config.py
+index 17b6c0329..6b13dc00d 100644
+--- a/hermes_cli/mcp_config.py
++++ b/hermes_cli/mcp_config.py
+@@ -533,6 +533,20 @@ def cmd_mcp_list(args=None):
+     print(f"  {'─' * 16} {'─' * 30} {'─' * 12} {'─' * 10}")
+ 
+     for name, cfg in servers.items():
++        # Defensive: users sometimes stuff a raw string into mcp_servers.NAME
++        # via `hermes config set` (or hand-edited YAML), which previously
++        # crashed the whole list with AttributeError on `cfg.get(...)`.
++        # Coerce string shorthand to {url: str}; skip anything else with a
++        # warning instead of aborting the listing.
++        if isinstance(cfg, str):
++            cfg = {"url": cfg}
++        elif not isinstance(cfg, dict):
++            _warning(
++                f"Skipping malformed MCP entry '{name}': "
++                f"expected dict, got {type(cfg).__name__}"
++            )
++            continue
++
+         # Transport info
+         if "url" in cfg:
+             url = cfg["url"]
+diff --git a/hermes_cli/subcommands/mcp.py b/hermes_cli/subcommands/mcp.py
+index 405a98457..0f1156441 100644
+--- a/hermes_cli/subcommands/mcp.py
++++ b/hermes_cli/subcommands/mcp.py
+@@ -60,11 +60,15 @@ def build_mcp_parser(subparsers, *, cmd_mcp: Callable) -> None:
+     )
+     mcp_add_p.add_argument("--auth", choices=["oauth", "header"], help="Auth method")
+     mcp_add_p.add_argument("--preset", help="Known MCP preset name")
++    # action="append" so users can repeat --env (e.g. `--env A=1 --env B=2`)
++    # without losing earlier values. Previously nargs="*" silently dropped
++    # every occurrence but the last (repeated flags overwrite with nargs="*").
+     mcp_add_p.add_argument(
+         "--env",
+-        nargs="*",
++        action="append",
+         default=[],
+-        help="Environment variables for stdio servers (KEY=VALUE)",
++        metavar="KEY=VALUE",
++        help="Environment variables for stdio servers (KEY=VALUE; repeatable)",
+     )
+ 
+     mcp_rm_p = mcp_sub.add_parser("remove", aliases=["rm"], help="Remove an MCP server")
