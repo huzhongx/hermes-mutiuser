@@ -1,0 +1,19 @@
+diff --git a/tools/mcp_tool.py b/tools/mcp_tool.py
+index 51c740d88..aaa4f89dd 100644
+--- a/tools/mcp_tool.py
++++ b/tools/mcp_tool.py
+@@ -258,7 +258,13 @@ if _MCP_AVAILABLE and not _MCP_MESSAGE_HANDLER_SUPPORTED:
+ # ---------------------------------------------------------------------------
+ 
+ _DEFAULT_TOOL_TIMEOUT = 120      # seconds for tool calls
+-_DEFAULT_CONNECT_TIMEOUT = 60    # seconds for initial connection per server
++# Default per-server initial connection timeout. Servers connect in parallel
++# (see register_mcp_servers._discover_all), so a slow/broken server only
++# blocks its own slot — but a too-long timeout (was 60s) × 3 retries = 3min
++# per dead server still drags bootstrap.
++# 10s is plenty for a healthy stdio/HTTP MCP to start up; broken ones fail
++# fast so the broker can report MCP ready sooner.
++_DEFAULT_CONNECT_TIMEOUT = 10    # seconds for initial connection per server
+ _MAX_RECONNECT_RETRIES = 5
+ _MAX_INITIAL_CONNECT_RETRIES = 3 # retries for the very first connection attempt
+ _MAX_BACKOFF_SECONDS = 60
