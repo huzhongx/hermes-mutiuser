@@ -722,7 +722,45 @@ class ProcessBroker:
 
 _GITHUB_CLIENT_ID = os.environ.get("GITHUB_CLIENT_ID", "")
 _GITHUB_CLIENT_SECRET = os.environ.get("GITHUB_CLIENT_SECRET", "")
-_JWT_SECRET = secrets.token_hex(32)
+
+# Persist JWT signing secret across restarts so existing cookies stay valid.
+# If the secret rotated on every restart, every user would be force-logged-out
+# after a broker code reload. Stored alongside .env with mode 0600.
+# To force-rotate (e.g. after suspected leak), `rm` this file before restart.
+_JWT_SECRET_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".jwt_secret")
+
+
+def _load_or_create_jwt_secret() -> str:
+    """Read JWT secret from disk; generate + persist if absent.
+
+    Atomic write via temp file + rename. File mode 0600 so only the broker
+    process owner can read it.
+    """
+    try:
+        with open(_JWT_SECRET_FILE, "r") as f:
+            secret = f.read().strip()
+        if len(secret) >= 32:
+            return secret
+    except FileNotFoundError:
+        pass
+    except OSError:
+        pass
+    # Generate new
+    secret = secrets.token_hex(32)
+    try:
+        tmp = _JWT_SECRET_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            f.write(secret)
+        os.chmod(tmp, 0o600)
+        os.rename(tmp, _JWT_SECRET_FILE)
+    except OSError:
+        # Fall back to in-memory secret if we can't persist — broker still
+        # works, but next restart will rotate the secret.
+        pass
+    return secret
+
+
+_JWT_SECRET = _load_or_create_jwt_secret()
 _JWT_ALG = "HS256"
 _JWT_EXP_SECONDS = 7 * 24 * 3600  # 7 days
 _OAUTH_STATE_STORE: Dict[str, float] = {}  # state → created_at, in-memory
