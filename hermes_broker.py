@@ -83,15 +83,21 @@ class HermesProcess:
 class ProcessBroker:
     def __init__(
         self,
-        work_root: str = "/tmp/hermes_sessions",
-        base_port: int = 9119,
-        max_port: int = 9200,
-        max_users: int = 80,
-        idle_timeout: int = 1800,
+        work_root: str = None,
+        base_port: int = None,
+        max_port: int = None,
+        max_users: int = None,
+        idle_timeout: int = None,
         start_timeout: int = 90,
-        warm_pool_size: int = 3,
+        warm_pool_size: int = None,
         warm_pool_interval: int = 30,
     ):
+        work_root = work_root or os.environ.get("SESSIONS_ROOT", "/tmp/hermes_sessions")
+        base_port = base_port or int(os.environ.get("BASE_PORT", "9119"))
+        max_port = max_port or int(os.environ.get("MAX_PORT", "9200"))
+        max_users = max_users or int(os.environ.get("MAX_SESSIONS", "80"))
+        idle_timeout = idle_timeout or int(os.environ.get("IDLE_TIMEOUT", "1800"))
+        warm_pool_size = warm_pool_size or int(os.environ.get("WARM_POOL_SIZE", "3"))
         self.work_root = Path(work_root)
         self.base_port = base_port
         self.max_port = max_port
@@ -738,6 +744,13 @@ class ProcessBroker:
                     except OSError:
                         pass
                     if now - p.last_active_at > self.idle_timeout:
+                        # WS goes direct to dashboard (nginx), not via broker,
+                        # so last_active_at misses WS activity. Check if the
+                        # dashboard still has active WS clients before killing.
+                        if await self._has_ws_clients(p.port):
+                            p.touch()
+                            logger.debug(f"[{uid}] WS still active, touched")
+                            continue
                         to_close.append(uid)
                 for uid in to_close:
                     logger.info(f"[{uid}] 空闲超时 {self.idle_timeout}s，回收")
@@ -746,6 +759,22 @@ class ProcessBroker:
                 break
             except Exception as e:
                 logger.error(f"清理异常: {e}")
+
+    async def _has_ws_clients(self, port: int) -> bool:
+        """Check if the dashboard port has established TCP connections
+        (proxy for active WS clients). WS goes direct via nginx, not broker."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "ss", "-tn", f"( sport = :{port} )",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+            # ss output: header line + one line per connection
+            lines = stdout.decode().strip().split("\n")
+            return len(lines) > 1
+        except Exception:
+            return False
 
     def stats(self) -> dict:
         return {
@@ -1132,6 +1161,34 @@ async def reload_config():
     import importlib
     logger.info("Broker reload requested")
     return {"status": "ok", "note": "Child processes preserved"}
+
+
+@app.post("/broker/reload-mcp/{user_id}")
+async def reload_mcp_for_user(user_id: str):
+    """Forward reload.mcp RPC to a specific user's Hermes dashboard process."""
+    proc = broker._procs.get(user_id)
+    if proc is None:
+        raise HTTPException(status_code=404, detail=f"No process for user {user_id}")
+    try:
+        import json
+        ws_url = f"ws://127.0.0.1:{proc.port}/api/ws?token={proc.ws_token}"
+        session = await _get_proxy_http()
+        async with session.ws_connect(ws_url) as hermes_ws:
+            reload_req = json.dumps({"jsonrpc": "2.0", "id": "_reload_mcp", "method": "reload.mcp", "params": {}})
+            await hermes_ws.send_str(reload_req)
+            async for msg in hermes_ws:
+                if msg.type == aiohttp.WSMsgType.TEXT:
+                    try:
+                        data = json.loads(msg.data)
+                        if data.get("id") == "_reload_mcp":
+                            logger.info(f"[{user_id}] reload.mcp forwarded OK → port {proc.port}")
+                            return {"status": "ok", "port": proc.port, "response": data.get("result")}
+                    except Exception:
+                        break
+        return {"status": "ok", "port": proc.port}
+    except Exception as e:
+        logger.warning(f"[{user_id}] reload.mcp failed: {e}")
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 # ── Graceful drain ──────────────────────────────────────
