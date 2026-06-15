@@ -1,0 +1,147 @@
+diff --git a/agent/auxiliary_client.py b/agent/auxiliary_client.py
+index c6e00340e..cd067e7bd 100644
+--- a/agent/auxiliary_client.py
++++ b/agent/auxiliary_client.py
+@@ -1838,6 +1838,13 @@ def _resolve_custom_runtime() -> Tuple[Optional[str], Optional[str], Optional[st
+     if base_url_host_matches(custom_base, "openrouter.ai"):
+         # requested='custom' falls back to OpenRouter when no custom endpoint is
+         # configured. Treat that as "no custom endpoint" for auxiliary routing.
++        # But first check if OPENAI_BASE_URL is set in the environment — the
++        # broker injects it so the auxiliary client can resolve the user's
++        # custom provider even when config's provider is "custom:<name>".
++        env_base = os.getenv("OPENAI_BASE_URL", "").strip().rstrip("/")
++        if env_base and not base_url_host_matches(env_base, "openrouter.ai"):
++            env_key = os.getenv("OPENAI_API_KEY", "").strip() or "no-key-required"
++            return env_base, env_key, None
+         return None, None, None
+ 
+     # Local servers (Ollama, llama.cpp, vLLM, LM Studio) don't require auth.
+diff --git a/agent/conversation_compression.py b/agent/conversation_compression.py
+index 913c0e25d..db82a3cb1 100644
+--- a/agent/conversation_compression.py
++++ b/agent/conversation_compression.py
+@@ -504,6 +504,14 @@ def compress_context(
+             old_title = agent._session_db.get_session_title(agent.session_id)
+             # Trigger memory extraction on the old session before it rotates.
+             agent.commit_memory_session(messages)
++            # Flush any pending messages for the old session BEFORE it is
++            # closed.  Without this, messages accumulated between the
++            # previous flush and this compression are silently lost because
++            # _persist_session only runs at turn-exit, but mid-turn
++            # compressions can chain (each API call + tool response may
++            # exceed the token threshold again), closing each intermediate
++            # session before the turn ever finishes.
++            agent._flush_messages_to_session_db(messages)
+             agent._session_db.end_session(agent.session_id, "compression")
+             old_session_id = agent.session_id
+             agent.session_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+diff --git a/hermes_cli/mcp_config.py b/hermes_cli/mcp_config.py
+index 17b6c0329..6b13dc00d 100644
+--- a/hermes_cli/mcp_config.py
++++ b/hermes_cli/mcp_config.py
+@@ -533,6 +533,20 @@ def cmd_mcp_list(args=None):
+     print(f"  {'─' * 16} {'─' * 30} {'─' * 12} {'─' * 10}")
+ 
+     for name, cfg in servers.items():
++        # Defensive: users sometimes stuff a raw string into mcp_servers.NAME
++        # via `hermes config set` (or hand-edited YAML), which previously
++        # crashed the whole list with AttributeError on `cfg.get(...)`.
++        # Coerce string shorthand to {url: str}; skip anything else with a
++        # warning instead of aborting the listing.
++        if isinstance(cfg, str):
++            cfg = {"url": cfg}
++        elif not isinstance(cfg, dict):
++            _warning(
++                f"Skipping malformed MCP entry '{name}': "
++                f"expected dict, got {type(cfg).__name__}"
++            )
++            continue
++
+         # Transport info
+         if "url" in cfg:
+             url = cfg["url"]
+diff --git a/hermes_cli/subcommands/mcp.py b/hermes_cli/subcommands/mcp.py
+index 405a98457..0f1156441 100644
+--- a/hermes_cli/subcommands/mcp.py
++++ b/hermes_cli/subcommands/mcp.py
+@@ -60,11 +60,15 @@ def build_mcp_parser(subparsers, *, cmd_mcp: Callable) -> None:
+     )
+     mcp_add_p.add_argument("--auth", choices=["oauth", "header"], help="Auth method")
+     mcp_add_p.add_argument("--preset", help="Known MCP preset name")
++    # action="append" so users can repeat --env (e.g. `--env A=1 --env B=2`)
++    # without losing earlier values. Previously nargs="*" silently dropped
++    # every occurrence but the last (repeated flags overwrite with nargs="*").
+     mcp_add_p.add_argument(
+         "--env",
+-        nargs="*",
++        action="append",
+         default=[],
+-        help="Environment variables for stdio servers (KEY=VALUE)",
++        metavar="KEY=VALUE",
++        help="Environment variables for stdio servers (KEY=VALUE; repeatable)",
+     )
+ 
+     mcp_rm_p = mcp_sub.add_parser("remove", aliases=["rm"], help="Remove an MCP server")
+diff --git a/tools/mcp_oauth.py b/tools/mcp_oauth.py
+index 04d20be76..afc857697 100644
+--- a/tools/mcp_oauth.py
++++ b/tools/mcp_oauth.py
+@@ -901,7 +901,26 @@ def _configure_callback_port(cfg: dict, storage: "HermesTokenStorage | None" = N
+         cached_port = _port_from_cached_client(storage)
+         if cached_port is not None:
+             requested = cached_port
+-    port = _find_free_port() if requested == 0 else requested
++    if requested == 0:
++        port = _find_free_port()
++    else:
++        # Validate the requested port is actually bindable — on multi-user
++        # hosts multiple Hermes processes may share the same fixed
++        # redirect_port (e.g. 47892).  If it's already taken, fall back to a
++        # free port so the OAuth flow can still proceed.
++        port = requested
++        try:
++            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
++                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
++                s.bind(("127.0.0.1", requested))
++        except OSError:
++            logger.warning(
++                "OAuth callback port %d is already in use, falling back to a "
++                "free port for server '%s'",
++                requested,
++                storage._server_name if storage else "?",
++            )
++            port = _find_free_port()
+     cfg["_resolved_port"] = port
+     _oauth_port = port  # legacy consumer: _wait_for_callback reads this
+     return port
+diff --git a/tools/mcp_tool.py b/tools/mcp_tool.py
+index 51c740d88..aaa4f89dd 100644
+--- a/tools/mcp_tool.py
++++ b/tools/mcp_tool.py
+@@ -258,7 +258,13 @@ if _MCP_AVAILABLE and not _MCP_MESSAGE_HANDLER_SUPPORTED:
+ # ---------------------------------------------------------------------------
+ 
+ _DEFAULT_TOOL_TIMEOUT = 120      # seconds for tool calls
+-_DEFAULT_CONNECT_TIMEOUT = 60    # seconds for initial connection per server
++# Default per-server initial connection timeout. Servers connect in parallel
++# (see register_mcp_servers._discover_all), so a slow/broken server only
++# blocks its own slot — but a too-long timeout (was 60s) × 3 retries = 3min
++# per dead server still drags bootstrap.
++# 10s is plenty for a healthy stdio/HTTP MCP to start up; broken ones fail
++# fast so the broker can report MCP ready sooner.
++_DEFAULT_CONNECT_TIMEOUT = 10    # seconds for initial connection per server
+ _MAX_RECONNECT_RETRIES = 5
+ _MAX_INITIAL_CONNECT_RETRIES = 3 # retries for the very first connection attempt
+ _MAX_BACKOFF_SECONDS = 60
+diff --git a/tools/skills_tool.py b/tools/skills_tool.py
+index 745a8ef6c..a86f75889 100644
+--- a/tools/skills_tool.py
++++ b/tools/skills_tool.py
+@@ -72,6 +72,7 @@ import logging
+ from hermes_constants import get_hermes_home, display_hermes_home
+ import os
+ import re
++import threading
+ import time
+ from enum import Enum
+ from pathlib import Path, PurePosixPath, PureWindowsPath
