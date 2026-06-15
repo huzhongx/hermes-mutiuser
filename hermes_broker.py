@@ -106,6 +106,8 @@ class ProcessBroker:
         self._used_ports: Set[int] = set()
         self._free_ports: Set[int] = set(range(base_port, max_port + 1))
         self._lock = asyncio.Lock()
+        # Per-user locks to prevent the TOCTOU race in acquire() — see _user_locks docstring.
+        self._user_locks: Dict[str, asyncio.Lock] = {}
         self._cleanup_task: Optional[asyncio.Task] = None
         self._warm_task: Optional[asyncio.Task] = None
 
@@ -192,12 +194,18 @@ class ProcessBroker:
         """
         为用户分配一个 Hermes 进程。
         如果已有活跃进程直接返回；否则从预热池取或冷启动。
+
+        Concurrency: a per-user asyncio.Lock serialises the "check existing
+        → spawn" window so two simultaneous requests for the same user_id
+        cannot each spawn a fresh dashboard. The broker-wide lock is still
+        used to safely fetch/create the per-user lock and to mutate shared
+        state (_procs, _free_ports).
         """
         # Drain mode — reject new allocations
         if self._draining:
             raise RuntimeError("Broker is draining, not accepting new connections")
 
-        # 已有活跃进程 → 检查存活
+        # Fast-path: existing live proc → no per-user lock needed (read-only).
         async with self._lock:
             existing = self._procs.get(user_id)
             if existing and existing.status == "active":
@@ -215,25 +223,58 @@ class ProcessBroker:
                     existing.touch()
                     return self._make_info(existing)
 
-        # 容量检查
-        async with self._lock:
-            if len(self._procs) >= self.max_users:
-                raise RuntimeError(f"已达最大用户数 {self.max_users}")
+            # Get-or-create the per-user lock under the broker lock so the
+            # mapping itself stays consistent. The lock object outlives this
+            # acquire() call so concurrent callers serialise on the same one.
+            user_lock = self._user_locks.get(user_id)
+            if user_lock is None:
+                user_lock = asyncio.Lock()
+                self._user_locks[user_id] = user_lock
 
-        # 尝试从预热池取
-        proc = await self._take_warm(user_id)
-        if proc is None:
-            proc = await self._spawn(user_id)
+        # Serialise the spawn section for this user_id.
+        async with user_lock:
+            # Re-check inside the user lock: another coroutine for the same
+            # user_id may have completed the spawn while we were waiting.
+            async with self._lock:
+                existing = self._procs.get(user_id)
+                if existing and existing.status == "active":
+                    try:
+                        os.kill(existing.pid, 0)
+                    except ProcessLookupError:
+                        self._procs.pop(user_id, None)
+                        self._free_port(existing.port)
+                        existing = None
+                    except OSError:
+                        pass
+                    if existing:
+                        existing.touch()
+                        return self._make_info(existing)
 
-        proc.status = "active"
-        async with self._lock:
-            self._procs[user_id] = proc
+                # Capacity check (post-recheck, so a freed slot from a
+                # crashed proc above is honoured here).
+                if len(self._procs) >= self.max_users:
+                    raise RuntimeError(f"已达最大用户数 {self.max_users}")
 
-        return self._make_info(proc)
+            # Release broker lock around the slow spawn path so other users
+            # aren't blocked. Per-user lock still held → only one spawn per
+            # user_id at a time.
+            proc = await self._take_warm(user_id)
+            if proc is None:
+                proc = await self._spawn(user_id)
+
+            proc.status = "active"
+            async with self._lock:
+                self._procs[user_id] = proc
+
+            return self._make_info(proc)
 
     async def release(self, user_id: str, flush: bool = True):
         async with self._lock:
             proc = self._procs.pop(user_id, None)
+            # Drop the per-user lock so the dict doesn't grow unbounded
+            # across long broker uptimes. Safe to drop here because anyone
+            # who later calls acquire() for this user will get a fresh lock.
+            self._user_locks.pop(user_id, None)
         if not proc:
             return
         if flush:
