@@ -1,0 +1,56 @@
+diff --git a/tui_gateway/server.py b/tui_gateway/server.py
+index 4c1746b8f..3e68cff0e 100644
+--- a/tui_gateway/server.py
++++ b/tui_gateway/server.py
+@@ -1448,6 +1448,18 @@ def _resolve_startup_runtime() -> tuple[str, str | None]:
+     if explicit_provider:
+         return model, explicit_provider
+ 
++    # Always read provider from config.yaml so custom:openclaw-router
++    # is honored even without HERMES_MODEL env var.  Without this, new
++    # sessions fall through resolve_runtime_provider() → openrouter.
++    cfg = _load_cfg().get("model") or {}
++    config_provider = (
++        str(cfg.get("provider") or "").strip()
++        if isinstance(cfg, dict)
++        else ""
++    )
++    if config_provider:
++        return model, config_provider
++
+     explicit_model = (
+         os.environ.get("HERMES_MODEL", "")
+         or os.environ.get("HERMES_INFERENCE_MODEL", "")
+@@ -1520,13 +1532,18 @@ def _stored_session_runtime_overrides(row: dict | None) -> dict:
+         # initial resume and later rebuilds (/new). Deliberately do not persist
+         # or restore raw api_key here; endpoint credentials should continue to
+         # come from config/env/provider resolution rather than the session DB.
++        #
++        # When base_url was NOT persisted, omit both provider and base_url
++        # overrides so _make_agent falls back to config.yaml resolution
++        # instead of routing bare "custom" → openrouter.
++        _has_endpoint = bool(base_url)
+         overrides["model_override"] = {
+             "model": model,
+-            "provider": provider or None,
++            "provider": provider if _has_endpoint else None,
+             "base_url": base_url or None,
+             "api_mode": api_mode or None,
+         }
+-    if provider:
++    if provider and _has_endpoint:
+         overrides["provider_override"] = provider
+     if isinstance(reasoning_config, dict):
+         overrides["reasoning_config_override"] = reasoning_config
+@@ -3283,6 +3300,11 @@ def _make_agent(
+         model = str(model_override.get("model") or "")
+         requested_provider = model_override.get("provider") or provider_override or None
+         override_base_url = model_override.get("base_url")
++        # When resume stored only model+provider but no base_url, fall back to
++        # config.yaml provider so "custom" without base_url doesn't hit openrouter.
++        if not requested_provider and not override_base_url:
++            cfg = _load_cfg().get("model") or {}
++            requested_provider = str(cfg.get("provider") or "").strip() if isinstance(cfg, dict) else ""
+         override_api_key = model_override.get("api_key")
+         override_api_mode = model_override.get("api_mode")
+         runtime = resolve_runtime_provider(
