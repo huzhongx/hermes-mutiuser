@@ -1,0 +1,39 @@
+--- a/tools/mcp_tool.py
++++ b/tools/mcp_tool.py
+@@ -2880,17 +2880,27 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
+             except Exception:
+                 pass
+ 
+-            error_result = {
+-                "error": _sanitize_error(
+-                    f"MCP server '{server_name}' requires re-authentication. "
+-                    f"Open the authorization URL in your browser to complete OAuth."
+-                ),
+-                "needs_reauth": True,
+-                "server": server_name,
+-            }
+             if oauth_url:
+-                error_result["oauth_url"] = oauth_url
+-                error_result["oauth_callback_port"] = callback_port
++                error_result = {
++                    "error": _sanitize_error(
++                        f"MCP server '{server_name}' requires re-authentication. "
++                        f"Open the authorization URL in your browser to complete OAuth."
++                    ),
++                    "needs_reauth": True,
++                    "server": server_name,
++                    "oauth_url": oauth_url,
++                    "oauth_callback_port": callback_port,
++                }
++            else:
++                # Generic non-auth error (schema validation, network, timeout, etc.)
++                # — must NOT claim re-auth so the model doesn't hallucinate manual
++                # refresh for unrelated failures (e.g. null field in response).
++                error_result = {
++                    "error": _sanitize_error(
++                        f"MCP tool {tool_name} failed on server '{server_name}': {exc}"
++                    ),
++                    "server": server_name,
++                }
+ 
+             return json.dumps(error_result, ensure_ascii=False)

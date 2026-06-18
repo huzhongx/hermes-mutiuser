@@ -1,0 +1,16 @@
+--- a/agent/skill_utils.py	2026-06-17 13:27:40.334731762 +0800
++++ b/agent/skill_utils.py	2026-06-17 13:26:29.909730718 +0800
+@@ -636,7 +636,13 @@ def iter_skill_index_files(skills_dir: P
+     directories so dependencies cannot register nested skills.
+     """
+     matches = []
++    visited: set[Path] = set()
+     for root, dirs, files in os.walk(skills_dir, followlinks=True):
++        real_root = Path(root).resolve()
++        if real_root in visited:
++            dirs[:] = []
++            continue
++        visited.add(real_root)
+         dirs[:] = [d for d in dirs if d not in EXCLUDED_SKILL_DIRS]
+         if filename in files:
+             matches.append(Path(root) / filename)

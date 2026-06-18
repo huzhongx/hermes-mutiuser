@@ -1,0 +1,103 @@
+diff --git a/tools/mcp_tool.py b/tools/mcp_tool.py
+index 51c740d88..5833b3433 100644
+--- a/tools/mcp_tool.py
++++ b/tools/mcp_tool.py
+@@ -258,7 +258,13 @@ if _MCP_AVAILABLE and not _MCP_MESSAGE_HANDLER_SUPPORTED:
+ # ---------------------------------------------------------------------------
+ 
+ _DEFAULT_TOOL_TIMEOUT = 120      # seconds for tool calls
+-_DEFAULT_CONNECT_TIMEOUT = 60    # seconds for initial connection per server
++# Default per-server initial connection timeout. Servers connect in parallel
++# (see register_mcp_servers._discover_all), so a slow/broken server only
++# blocks its own slot — but a too-long timeout (was 60s) × 3 retries = 3min
++# per dead server still drags bootstrap.
++# 10s is plenty for a healthy stdio/HTTP MCP to start up; broken ones fail
++# fast so the broker can report MCP ready sooner.
++_DEFAULT_CONNECT_TIMEOUT = 10    # seconds for initial connection per server
+ _MAX_RECONNECT_RETRIES = 5
+ _MAX_INITIAL_CONNECT_RETRIES = 3 # retries for the very first connection attempt
+ _MAX_BACKOFF_SECONDS = 60
+@@ -2777,10 +2783,28 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
+                 for block in (result.content or []):
+                     if hasattr(block, "text"):
+                         error_text += block.text
++                # If error_text is itself a JSON object with a nested
++                # message, extract the readable message so the model
++                # gets a clear actionable error instead of double-encoded JSON.
++                display_error = error_text or "MCP tool returned an error"
++                try:
++                    inner = json.loads(error_text)
++                    if isinstance(inner, dict):
++                        # Common patterns: {"error": {"message": ...}}
++                        # or {"message": ...} or {"error": "text"}
++                        nested = inner.get("error", {})
++                        if isinstance(nested, dict):
++                            msg = nested.get("message") or nested.get("msg")
++                            if msg:
++                                display_error = msg
++                        elif isinstance(nested, str) and nested:
++                            display_error = nested
++                        elif inner.get("message"):
++                            display_error = inner["message"]
++                except (json.JSONDecodeError, TypeError):
++                    pass
+                 return json.dumps({
+-                    "error": _sanitize_error(
+-                        error_text or "MCP tool returned an error"
+-                    )
++                    "error": _sanitize_error(display_error)
+                 }, ensure_ascii=False)
+ 
+             # Collect text from content blocks. MCP tool results can also
+@@ -2827,7 +2851,12 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
+             try:
+                 parsed = json.loads(result)
+                 if "error" in parsed:
+-                    _bump_server_error(server_name)
++                    # Business errors (isError from MCP tool) should NOT
++                    # bump the circuit breaker — the server is healthy, the
++                    # model just needs to retry with different arguments.
++                    # Only transport/auth failures (caught in the except
++                    # block below) indicate server unreachability.
++                    _reset_server_error(server_name)
+                 else:
+                     _reset_server_error(server_name)  # success — reset
+             except (json.JSONDecodeError, TypeError):
+@@ -2874,17 +2903,27 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
+             except Exception:
+                 pass
+ 
+-            error_result = {
+-                "error": _sanitize_error(
+-                    f"MCP server '{server_name}' requires re-authentication. "
+-                    f"Open the authorization URL in your browser to complete OAuth."
+-                ),
+-                "needs_reauth": True,
+-                "server": server_name,
+-            }
+             if oauth_url:
+-                error_result["oauth_url"] = oauth_url
+-                error_result["oauth_callback_port"] = callback_port
++                error_result = {
++                    "error": _sanitize_error(
++                        f"MCP server '{server_name}' requires re-authentication. "
++                        f"Open the authorization URL in your browser to complete OAuth."
++                    ),
++                    "needs_reauth": True,
++                    "server": server_name,
++                    "oauth_url": oauth_url,
++                    "oauth_callback_port": callback_port,
++                }
++            else:
++                # Generic non-auth error (schema validation, network, timeout, etc.)
++                # — must NOT claim re-auth so the model doesn't hallucinate manual
++                # refresh for unrelated failures (e.g. null field in response).
++                error_result = {
++                    "error": _sanitize_error(
++                        f"MCP tool {tool_name} failed on server '{server_name}': {exc}"
++                    ),
++                    "server": server_name,
++                }
+ 
+             return json.dumps(error_result, ensure_ascii=False)
+ 
