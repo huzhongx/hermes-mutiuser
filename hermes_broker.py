@@ -439,13 +439,17 @@ class ProcessBroker:
                 os.symlink(src, dst)
 
         # Skills: symlink system skills from global HERMES_HOME
+        # Skip skills that user has opted out of via .skipped/{skill_name}
         for dname in ("skills",):
             src = _HERMES_CONFIG_HOME / dname
             dst = user_home / dname
             if src.is_dir() and not (dst.exists() or dst.is_symlink()):
                 dst.mkdir(parents=True, exist_ok=True)
+                skip_dir = dst / ".skipped"
                 for skill_entry in src.iterdir():
                     if skill_entry.is_dir():
+                        if (skip_dir / skill_entry.name).exists():
+                            continue
                         os.symlink(str(skill_entry), str(dst / skill_entry.name))
 
         # Symlink shared files (skill snapshots etc.)
@@ -1791,12 +1795,17 @@ async def proxy_skills_list(request: Request):
     global_skills_dir = _HERMES_CONFIG_HOME / "skills"
 
     # Sync: ensure system skills are symlinks to global HERMES_HOME
+    # Users can opt out of a system skill by creating .skipped/{skill_name}
     needs_reload = False
+    _skip_dir = user_skills_dir / ".skipped"
     if global_skills_dir.is_dir():
         for skill_entry in global_skills_dir.iterdir():
             if not skill_entry.is_dir():
                 continue
             user_skill = user_skills_dir / skill_entry.name
+            # Skip if user has explicitly opted out of this system skill
+            if (_skip_dir / skill_entry.name).exists():
+                continue
             if not user_skill.exists():
                 os.symlink(str(skill_entry), str(user_skill))
                 logger.info(f"[{proc.user_id}] Synced system skill: {skill_entry.name}")
