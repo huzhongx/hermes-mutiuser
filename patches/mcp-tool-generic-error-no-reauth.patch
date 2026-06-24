@@ -1,6 +1,8 @@
+diff --git a/tools/mcp_tool.py b/tools/mcp_tool.py
+index 51c740d88..3f61a83af 100644
 --- a/tools/mcp_tool.py
 +++ b/tools/mcp_tool.py
-@@ -2880,17 +2880,27 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
+@@ -2874,17 +2874,27 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
              except Exception:
                  pass
  
@@ -37,3 +39,4 @@
 +                }
  
              return json.dumps(error_result, ensure_ascii=False)
+ 
