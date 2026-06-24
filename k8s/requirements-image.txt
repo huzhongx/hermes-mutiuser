@@ -1,0 +1,17 @@
+# ── 镜像用 Python 依赖（完整集合）──────────────────────────
+# 与仓库 requirements.txt 的差异：补上 broker 实际 import 但缺失的 pyjwt / requests。
+# 这是「镜像专用」文件 —— 不改动仓库根 requirements.txt，避免影响本机已装环境。
+# 版本对齐现网运行版本（pyjwt 2.13.0 / requests 2.31.0）。
+
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+asyncpg==0.29.0
+redis[asyncio]==5.0.4
+python-dotenv==1.0.1
+pydantic==2.7.1
+aiohttp==3.9.5
+tenacity==8.3.0
+
+# ── broker 实际依赖、但原 requirements.txt 缺失 ──
+PyJWT==2.13.0      # hermes_broker.py:38  import jwt as pyjwt
+requests==2.31.0   # hermes_broker.py:39  import requests as req_lib（GitHub token exchange）

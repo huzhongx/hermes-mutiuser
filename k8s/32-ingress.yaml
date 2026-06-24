@@ -1,0 +1,30 @@
+# ── Ingress：终结 TLS，把对外域名打到 hermes pod:80 ──
+# pod 内 nginx 接管全部路由（含 /hermes/ws/{port} 动态端口 + Origin 伪造）。
+# WS 升级：nginx-ingress 默认支持，无需特殊注解。
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: hermes
+  namespace: hermes
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"   # agent 响应慢
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"      # 上传
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    # 用 cert-manager 自动签发时加：
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [huzhongxiang.cloud]
+      secretName: hermes-tls     # 手工挂 TLS Secret；或用 cert-manager 自动签发同名 Secret
+  rules:
+    - host: huzhongxiang.cloud   # ← 改成集群对外域名（与 hermes-config 的 HERMES_NGINX_DOMAIN 一致）
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: hermes
+                port: { number: 80 }

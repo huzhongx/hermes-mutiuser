@@ -1,0 +1,55 @@
+# ── PostgreSQL（翻译自 docker-compose.yml）──
+# 阶段一 broker 不依赖；仅 api_server SaaS 模式用。可空挂待用。
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: hermes
+spec:
+  selector: { app: postgres }
+  ports:
+    - { name: pg, port: 5432, targetPort: 5432 }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: hermes
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector: { matchLabels: { app: postgres } }
+  template:
+    metadata: { labels: { app: postgres } }
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          env:
+            - { name: POSTGRES_USER,      value: hermes }
+            - { name: POSTGRES_PASSWORD, valueFrom: { secretKeyRef: { name: hermes-secret, key: POSTGRES_PASSWORD } } }
+            - { name: POSTGRES_DB,        value: hermes_platform }
+          ports: [ { containerPort: 5432, name: pg } ]
+          volumeMounts: [ { name: data, mountPath: /var/lib/postgresql/data } ]
+          # init_db.sql 如需自动执行：挂载到 /docker-entrypoint-initdb.d/
+          # - { name: initdb, mountPath: /docker-entrypoint-initdb.d/init_db.sql, subPath: init_db.sql }
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", "hermes", "-d", "hermes_platform"] }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            exec: { command: ["pg_isready", "-U", "hermes", "-d", "hermes_platform"] }
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: "1",  memory: 1Gi }
+      # volumes:
+      #   - name: initdb
+      #     configMap: { name: hermes-initdb }   # 需先从 scripts/init_db.sql 建 ConfigMap
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources: { requests: { storage: 20Gi } }
+        # storageClassName: <your-class>

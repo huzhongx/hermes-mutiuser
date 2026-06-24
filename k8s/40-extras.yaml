@@ -1,0 +1,49 @@
+# ── 占位：hermes_api (8642) 与 openclaw (3000) ──
+# 这两个是独立组件，pod 内 nginx 的 upstream 依赖其 Service 名（hermes-api / openclaw）。
+# 阶段一聚焦 broker + per-user 进程；此处先建 Service 让 DNS 可解析，
+# 并给骨架 Deployment（image 待各组件独立容器化后替换）。
+#
+# 未部署真实镜像前：/v1/* /api/* /hermes/v1/* / (根) 会 503 —— 属预期；
+# /broker /auth /hermes/ws /hermes/dash /chat 等broker链路不受影响。
+# ──────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata: { name: hermes-api, namespace: hermes }
+spec:
+  selector: { app: hermes-api }
+  ports: [ { name: api, port: 8642, targetPort: 8642 } ]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: openclaw, namespace: hermes }
+spec:
+  selector: { app: openclaw }
+  ports: [ { name: gw, port: 3000, targetPort: 3000 } ]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: hermes-api, namespace: hermes, labels: { app: hermes-api } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: hermes-api } }
+  template:
+    metadata: { labels: { app: hermes-api } }
+    spec:
+      containers:
+        - name: hermes-api
+          image: hermes-api:TODO        # ← 待独立构建
+          ports: [ { containerPort: 8642 } ]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: openclaw, namespace: hermes, labels: { app: openclaw } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: openclaw } }
+  template:
+    metadata: { labels: { app: openclaw } }
+    spec:
+      containers:
+        - name: openclaw
+          image: openclaw:TODO          # ← 待独立构建（现网 /root/.openclaw/）
+          ports: [ { containerPort: 3000 } ]

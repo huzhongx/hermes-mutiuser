@@ -1,0 +1,20 @@
+# ── 阶段一 apply 顺序 ──
+# 用法：kubectl apply -k k8s/
+# 注意：11-secret.yaml 是占位模板，建议改用 kubectl create secret 注入真实值后再 apply，
+#       或把本文件里的 11-secret.yaml 注释掉、单独管理 Secret。
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: hermes
+resources:
+  - 00-namespace.yaml
+  - 10-config.yaml
+  - 11-secret.yaml
+  - 20-postgres.yaml
+  - 21-redis.yaml
+  - 30-hermes-svc.yaml
+  - 31-hermes-statefulset.yaml
+  - 32-ingress.yaml
+  - 40-extras.yaml
+images:
+  - name: hermes-platform
+    newTag: phase1
