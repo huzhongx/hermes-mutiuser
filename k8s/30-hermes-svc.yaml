@@ -1,0 +1,13 @@
+# ── hermes headless Service ──
+# 既作 StatefulSet 的 serviceName（稳定网络身份），也作 Ingress 后端（解析到 pod IP）。
+# 单副本阶段，headless + Ingress 直接路由到该 pod。
+apiVersion: v1
+kind: Service
+metadata:
+  name: hermes
+  namespace: hermes
+spec:
+  clusterIP: None            # headless
+  selector: { app: hermes }
+  ports:
+    - { name: http, port: 80, targetPort: http }

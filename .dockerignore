@@ -1,0 +1,35 @@
+# ── Hermes Platform 镜像构建忽略表 ──
+# 目标：镜像只包含运行所需，不含本机密钥/会话数据/构建缓存。
+
+# Git / CI 元数据
+.git
+.github
+.gitignore
+
+# Python 缓存
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/.pytest_cache
+
+# 本机密钥（容器内用 k8s Secret 挂载，绝不烤进镜像）
+.env
+.jwt_secret
+*.pem
+*.key
+
+# 会话数据（PVC 提供，绝不进镜像）
+hermes_sessions/
+/tmp/
+
+# 日志
+*.log
+/tmp/broker.log
+
+# 文档与计划（运行不需要）
+docs/
+CLAUDE.md
+README.md
+
+# k8s 构建产物占位（prep-build-context.sh 会填充 k8s/build/）
+# 注意：k8s/build/ 不忽略 —— 它是 Dockerfile 的 COPY 源

@@ -1,0 +1,64 @@
+# ── ConfigMaps（非敏感配置）─────────────────────────────────
+# hermes-config:   以 envFrom 注入 broker 容器的环境变量
+# hermes-config-yaml: 全局 agent config.yaml（broker spawn 时拷进每用户 hermes_home）
+# hermes-nginx:    pod 内 nginx 配置（也可镜像内置，挂载便于热调）
+#
+# 注意：本文件不改动仓库 .env。真实值请从本机 .env 拷贝（RATE_LIMIT_* 等按实际填）。
+# ─────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hermes-config
+  namespace: hermes
+data:
+  # ── 路径 / 端口（与 StatefulSet 挂载/镜像对齐）──
+  SESSIONS_ROOT: /var/lib/hermes/sessions     # ← PVC 挂载点（与 volumeMounts 一致）
+  HERMES_HOME: /root/.hermes                  # ← 镜像内 agent + 全局基线
+  BASE_PORT: "9119"
+  MAX_PORT: "9200"
+  MAX_SESSIONS: "80"
+  IDLE_TIMEOUT: "1800"
+  WARM_POOL_SIZE: "3"
+  API_HOST: "0.0.0.0"
+  API_PORT: "8080"
+
+  # ── 对外域名（broker 拼 ws_url/http_url 用；客户端经 Ingress 访问此域名）──
+  HERMES_NGINX_DOMAIN: huzhongxiang.cloud     # ← 改成集群对外域名
+  HERMES_PUBLIC_HOST: "127.0.0.1"
+
+  # ── 限流（api_server SaaS 模式用；broker 不读，按 .env 实际值填）──
+  RATE_LIMIT_RPM: "60"
+  RATE_LIMIT_WINDOW: "60"
+
+  # ── PG/Redis 连接（非敏感部分；敏感见 11-secret.yaml）──
+  # 阶段一 broker 不依赖它们，仅 api_server 用；可空挂待用。
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: "5432"
+  POSTGRES_USER: hermes
+  POSTGRES_DB: hermes_platform
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hermes-config-yaml
+  namespace: hermes
+data:
+  # 把本机 /root/.hermes/config.yaml 全文粘到这里（单行转义或用 | 多行）。
+  # broker _spawn 时会把它拷进每用户 hermes_home。
+  # 例：
+  config.yaml: |
+    # ← 替换为真实 config.yaml 全文
+    # （从本机 /root/.hermes/config.yaml 拷贝）
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hermes-nginx
+  namespace: hermes
+data:
+  # 可选：用 ConfigMap 覆盖镜像内置的 nginx-pod.conf（便于不重建镜像调路由）。
+  # 默认不挂载（StatefulSet 注释掉了对应 volume）；需要时打开。
+  hermes-pod.conf: |
+    # 见 k8s/nginx-pod.conf；如需热调，把全文粘到这里并在 StatefulSet 启用挂载。
