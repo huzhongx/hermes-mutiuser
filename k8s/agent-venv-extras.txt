@@ -1,0 +1,18 @@
+# ── Agent 共享 venv 运行时依赖（技能脚本用，非 broker 依赖）──────────────
+# 这些包安装进 /root/.hermes/hermes-agent/venv，供所有用户的 dashboard 进程
+# 及技能脚本(skills/*/scripts/*.py)共享 import。
+#
+# 注意：与 requirements-image.txt(镜像/broker 依赖)分开 —— 那是 platform 进程
+# 用的；本文件是 agent 运行时「技能脚本」会用到的第三方库。
+#
+# 现网 venv 已通过 `venv/bin/pip install` 装好；本文件仅作「重建/审计」留档，
+# 记录 venv 里「非 hermes-agent 自带、由运维后装」的包。
+#
+# k8s 构建：prep-build-context.sh 把整个 venv 原样拷进镜像，所以这些包随镜像
+# 一起发布，无需构建期重装。若日后做「干净重建 venv」，按本清单 pip install 即可。
+#
+# ── 已安装清单（按装入时间） ──
+fpdf2            # PDF 生成（轻量，纯 Python）
+weasyprint       # HTML/CSS → PDF；提供 weasyprint.text.fonts.FontConfiguration
+                 #   依赖系统库：libpango / libcairo / libgdk-pixbuf（Ubuntu: apt install ...)
+pypdf            # PDF 读写/合并/拆分（PyPDF2 已废弃并并入 pypdf；脚本应 import pypdf）
