@@ -1,0 +1,51 @@
+diff --git a/tui_gateway/server.py b/tui_gateway/server.py
+index d882133fd..dffb0aff3 100644
+--- a/tui_gateway/server.py
++++ b/tui_gateway/server.py
+@@ -1408,7 +1408,9 @@ def _ensure_session_db_row(session: dict) -> None:
+         db.create_session(
+             key,
+             source=_session_source(session),
+-            model=row_model,
++            # Empty model → None so we don't persist a placeholder into the
++            # sticky sessions.model binding (per-turn resolver re-reads config).
++            model=row_model or None,
+             model_config=model_config or None,
+             cwd=_session_cwd(session) if session.get("explicit_cwd") else None,
+         )
+@@ -1676,7 +1678,18 @@ def _resolve_model() -> str:
+         return str(m.get("default", "") or "").strip()
+     if isinstance(m, str) and m:
+         return m.strip()
+-    return "anthropic/claude-sonnet-4"
++    # No model resolvable (no env var, no config.yaml model.default).
++    # Returning "" mirrors gateway/run.py:_resolve_gateway_model — callers
++    # (create_session, display) tolerate an empty model, and an empty
++    # sessions.model row lets the per-turn resolver re-read config.yaml on
++    # resume. Returning a concrete model name here is dangerous: it gets
++    # persisted into the sticky sessions.model binding, and if that name
++    # doesn't exist on the user's endpoint the session permanently 404s even
++    # after the config is fixed (the prior hardcoded
++    # "anthropic/claude-sonnet-4" fallback was such a footgun — guaranteed
++    # 404 on most custom endpoints, and inconsistent with the 4.6 default
++    # used elsewhere in the codebase).
++    return ""
+ 
+ 
+ def _config_model_target() -> tuple[str, str]:
+@@ -6500,10 +6513,14 @@ def _(rid, params: dict) -> dict:
+                 if hasattr(db, "get_next_title_in_lineage")
+                 else f"{current} (branch)"
+             )
++        _branch_model = _resolve_model()
+         db.create_session(
+             new_key,
+             source=_session_source(session),
+-            model=_resolve_model(),
++            # Never persist an unresolved/placeholder model into the sticky
++            # sessions.model binding — store None so the per-turn resolver
++            # re-reads config.yaml on resume instead of 404-ing forever.
++            model=_branch_model or None,
+             # Stable _branched_from marker so list_sessions_rich() keeps the
+             # branch visible in /resume and /sessions. The TUI branch leaves
+             # the parent live (no end_reason='branched'), so the legacy
