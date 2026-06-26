@@ -1564,25 +1564,21 @@ async def list_work_dirs(request: Request):
 
 
 async def proxy_download(file_path: str, request: Request):
-    """Serve a file from current session's work_dir for download (JWT auth)."""
+    """Serve a file from current session's work_dir for download (JWT auth).
+
+    NOTE: currently unreferenced (no route). Kept for parity with
+    download_files(): no hermes_home/logs blacklist, only path-traversal guard.
+    """
     proc = await _proc_for_request(request)
     user_root = Path(broker.work_root) / proc.user_id
     fpath = user_root / file_path
-    # Path traversal protection
+    # Path traversal protection (the only gate)
     try:
         fpath = fpath.resolve()
         if not str(fpath).startswith(str(user_root.resolve())):
             raise HTTPException(status_code=403, detail="Access denied")
     except (ValueError, OSError):
         raise HTTPException(status_code=400, detail="Invalid path")
-    # Block sensitive directories, but allow screenshots cache
-    _blocked = {"hermes_home", "logs"}
-    rel = fpath.relative_to(user_root.resolve())
-    parts = list(rel.parts)
-    if parts[:3] != ["hermes_home", "cache", "screenshots"]:
-        for part in parts:
-            if part.startswith('.') or part in _blocked:
-                raise HTTPException(status_code=403, detail="Access denied")
     if not fpath.is_file():
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(str(fpath), filename=fpath.name)
@@ -1590,26 +1586,43 @@ async def proxy_download(file_path: str, request: Request):
 
 @app.get("/api/files/download/{file_path:path}")
 async def download_files(file_path: str, request: Request):
-    """Download a file or folder as zip archive (JWT auth)."""
+    """Download a file or folder as zip archive (JWT auth).
+
+    No hermes_home/logs blacklist — any file under the user's work_root is
+    downloadable. Relative paths (e.g. ``./report.html`` produced by the agent
+    relative to the session cwd) are resolved against the session work_dir and
+    uploads dir when the direct user_root/file_path join doesn't exist.
+    """
     import zipfile, io
 
     proc = await _proc_for_request(request)
     user_root = Path(broker.work_root) / proc.user_id
+    user_root_resolved = user_root.resolve()
+    file_path = file_path.lstrip("/")  # tolerate leading slash from absolute-ish paths
     fpath = user_root / file_path
-    # Path traversal protection
+    # Path traversal protection (the only gate kept)
     try:
         fpath = fpath.resolve()
-        if not str(fpath).startswith(str(user_root.resolve())):
+        if not str(fpath).startswith(str(user_root_resolved)):
             raise HTTPException(status_code=403, detail="Access denied")
     except (ValueError, OSError):
         raise HTTPException(status_code=400, detail="Invalid path")
-    _blocked = {"hermes_home", "logs"}
-    rel = fpath.relative_to(user_root.resolve())
-    parts = list(rel.parts)
-    if parts[:3] != ["hermes_home", "cache", "screenshots"]:
-        for part in parts:
-            if part.startswith('.') or part in _blocked:
-                raise HTTPException(status_code=403, detail="Access denied")
+
+    # Relative-path fallback: when the user_root/file_path join doesn't exist,
+    # the agent often returns a path relative to the session cwd (work_dir).
+    # Search there (and uploads) before giving up, mirroring /api/screenshot.
+    if not fpath.exists() and proc.work_dir:
+        for candidate in (
+            Path(proc.work_dir) / file_path,
+            Path(proc.work_dir).parent / "uploads" / Path(file_path).name,
+        ):
+            try:
+                cand = candidate.resolve()
+            except (ValueError, OSError):
+                continue
+            if str(cand).startswith(str(user_root_resolved)) and cand.exists():
+                fpath = cand
+                break
 
     if fpath.is_file():
         # Serve image files inline so browsers display them instead of downloading
