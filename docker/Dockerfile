@@ -1,5 +1,5 @@
 FROM qx-images.tencentcloudcr.com/qunxing/python:3.10-slim
-RUN apt-get update && apt-get install -y --no-install-recommends nginx git ca-certificates curl patch && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends nginx git ca-certificates curl patch procps supervisor vim iputils-ping telnet sqlite3 && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt /tmp/
 RUN pip install --no-cache-dir -r /tmp/requirements.txt

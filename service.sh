@@ -19,5 +19,7 @@ echo "${IMAGE}"
 
 # 本地临时测试
 docker rm -f hermes-mutiuser 2>/dev/null
-docker run -itd --name hermes-mutiuser ${IMAGE}
+docker run -itd -p 8080:8080 -p 80:80 -p 443:443 --name hermes-mutiuser ${IMAGE}
+# docker ps -a
+# docker exec -it hermes-mutiuser bash
 
