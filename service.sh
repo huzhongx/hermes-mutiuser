@@ -37,6 +37,23 @@ rsync -a \
 echo "==> agent 就绪：${AGENT_CTX}/venv/bin/python"
 echo "    （如运行时发现 UI/TUI 构建产物缺失，去掉上面 --exclude='/node_modules' 重跑）"
 
+# ── venv 的解释器：uv 管理的独立 python（3.11.15），必须一并 COPY 进镜像相同路径 ──
+# venv/bin/python 是 symlink → /root/.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/bin/python3.11
+# pyvenv.cfg 的 home 用 cpython-3.11-...（指向 3.11.15 的 symlink）。
+# 镜像基础是 python:3.11-slim（系统 python 不参与），venv 仍走这个 uv python，故必须搬过去。
+UV_PY_SRC="${UV_PY_SRC:-/root/.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu}"
+UV_PY_CTX="./uv-python/cpython-3.11.15-linux-x86_64-gnu"
+
+if [ ! -x "${UV_PY_SRC}/bin/python3.11" ]; then
+    echo "ABORT: uv python 不存在：${UV_PY_SRC}/bin/python3.11" >&2
+    echo "       venv 的解释器靠它，镜像里没有则 agent 全部 import 失败。" >&2
+    exit 1
+fi
+echo "==> 同步 uv python（venv 解释器，104M）到构建上下文 ${UV_PY_CTX}"
+rm -rf ./uv-python
+mkdir -p "${UV_PY_CTX}"
+rsync -a "${UV_PY_SRC}/" "${UV_PY_CTX}/"
+
 docker build -f ${DOCKERFILE} --pull . -t ${IMAGE}
 echo "${IMAGE}"
 

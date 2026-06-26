@@ -38,3 +38,5 @@ README.md
 # 不让它被 `COPY . /opt/hermes-platform` 二次拷入 /opt/hermes-platform/hermes-agent
 # （会重复占用 1.6G+ 且路径混乱）
 hermes-agent/
+# service.sh 准备的 uv python（已单独 COPY 到 /root/.local/share/uv/...）
+uv-python/
