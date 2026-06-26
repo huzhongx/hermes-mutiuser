@@ -6,3 +6,7 @@ python-dotenv==1.0.1
 pydantic==2.7.1
 aiohttp==3.9.5
 tenacity==8.3.0
+PyJWT==2.13.0          # broker: JWT 会话 token（import jwt as pyjwt）
+requests==2.31.0       # broker: GitHub OAuth token 交换（import requests as req_lib）
+Markdown==3.10.2       # broker: README 文档接口渲染（markdown.markdown）
+PyYAML==6.0.1          # broker: 读用户 config.yaml（yaml.safe_load）
