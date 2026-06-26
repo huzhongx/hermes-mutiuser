@@ -22,6 +22,9 @@ RUN ln -s /root/.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu \
 
 WORKDIR /opt/hermes-platform
 COPY . /opt/hermes-platform
+# COPY . 会把 context 里的 hermes-agent/(1.7G) 和 uv-python/(104M) 也拷进来，
+# 但它们已分别 COPY 到 /root/.hermes 和 /root/.local/share/uv。删掉重复副本省空间。
+RUN rm -rf /opt/hermes-platform/hermes-agent /opt/hermes-platform/uv-python
 COPY k8s/nginx-pod.conf /etc/nginx/conf.d/default.conf
 EXPOSE 80 443
 
