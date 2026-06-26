@@ -3,3 +3,6 @@ __pycache__/
 .env
 .jwt_secret
 *.log
+.idea
+.claude
+hermes-agent
