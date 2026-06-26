@@ -33,3 +33,8 @@ README.md
 
 # k8s 构建产物占位（prep-build-context.sh 会填充 k8s/build/）
 # 注意：k8s/build/ 不忽略 —— 它是 Dockerfile 的 COPY 源
+
+# service.sh 准备的 agent（已单独 COPY 到 /root/.hermes/hermes-agent）
+# 不让它被 `COPY . /opt/hermes-platform` 二次拷入 /opt/hermes-platform/hermes-agent
+# （会重复占用 1.6G+ 且路径混乱）
+hermes-agent/

@@ -4,10 +4,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends nginx git ca-ce
 COPY requirements.txt /tmp/
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
+# agent：service.sh 已把现网「已打补丁 + 已建 venv」的 agent 同步到 ./hermes-agent，
+# 直接 COPY 即可（venv 含 591 个依赖包，broker spawn 用的 venv/bin/python 由此提供）。
+# 不在镜像内重打补丁 —— 补丁已在构建上下文的 agent 源码里应用过。
 COPY hermes-agent /root/.hermes/hermes-agent
+# patches 仅随镜像留档（provenance），便于溯源 agent 版本与改动
 COPY patches /tmp/patches
-# 执行有问题 先忽略
-# RUN cd /root/.hermes/hermes-agent && for p in /tmp/patches/*.patch; do git apply "$p" || patch -p1 < "$p"; done
 
 
 WORKDIR /opt/hermes-platform
