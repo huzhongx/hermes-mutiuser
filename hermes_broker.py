@@ -1589,40 +1589,48 @@ async def download_files(file_path: str, request: Request):
     """Download a file or folder as zip archive (JWT auth).
 
     No hermes_home/logs blacklist — any file under the user's work_root is
-    downloadable. Relative paths (e.g. ``./report.html`` produced by the agent
-    relative to the session cwd) are resolved against the session work_dir and
-    uploads dir when the direct user_root/file_path join doesn't exist.
+    downloadable. Accepts the three path shapes the agent emits:
+
+    - Absolute path under work_root: ``/tmp/hermes_sessions/<user>/.../file``
+    - Path relative to user_root:    ``246aa031.../report.html``
+    - Path relative to session cwd:  ``./report.html`` or bare ``report.html``
+      (resolved against proc.work_dir / uploads).
     """
     import zipfile, io
 
     proc = await _proc_for_request(request)
     user_root = Path(broker.work_root) / proc.user_id
     user_root_resolved = user_root.resolve()
-    file_path = file_path.lstrip("/")  # tolerate leading slash from absolute-ish paths
-    fpath = user_root / file_path
-    # Path traversal protection (the only gate kept)
-    try:
-        fpath = fpath.resolve()
-        if not str(fpath).startswith(str(user_root_resolved)):
-            raise HTTPException(status_code=403, detail="Access denied")
-    except (ValueError, OSError):
-        raise HTTPException(status_code=400, detail="Invalid path")
+    stripped = file_path.lstrip("/")  # for relative interpretations
 
-    # Relative-path fallback: when the user_root/file_path join doesn't exist,
-    # the agent often returns a path relative to the session cwd (work_dir).
-    # Search there (and uploads) before giving up, mirroring /api/screenshot.
-    if not fpath.exists() and proc.work_dir:
-        for candidate in (
-            Path(proc.work_dir) / file_path,
-            Path(proc.work_dir).parent / "uploads" / Path(file_path).name,
-        ):
-            try:
-                cand = candidate.resolve()
-            except (ValueError, OSError):
-                continue
-            if str(cand).startswith(str(user_root_resolved)) and cand.exists():
-                fpath = cand
-                break
+    def _under_user_root(p: Path) -> Path | None:
+        """Resolve p; return it iff it exists and stays under user_root."""
+        try:
+            r = p.resolve()
+        except (ValueError, OSError):
+            return None
+        if str(r).startswith(str(user_root_resolved)) and r.exists():
+            return r
+        return None
+
+    # Build candidate interpretations, pick the first that resolves under
+    # user_root and exists. Order matters: absolute → user_root-relative →
+    # session-cwd-relative → uploads-basename. Preserve a leading '/' so an
+    # absolute path the agent emitted (e.g. /tmp/hermes_sessions/...) stays
+    # absolute rather than being collapsed by lstrip.
+    candidates: list[Path] = [Path(file_path)]
+    candidates.append(user_root / stripped)
+    if proc.work_dir:
+        candidates.append(Path(proc.work_dir) / stripped)
+        candidates.append(Path(proc.work_dir).parent / "uploads" / Path(stripped).name)
+    fpath: Path | None = None
+    for c in candidates:
+        hit = _under_user_root(c)
+        if hit is not None:
+            fpath = hit
+            break
+    if fpath is None:
+        raise HTTPException(status_code=404, detail="File not found")
 
     if fpath.is_file():
         # Serve image files inline so browsers display them instead of downloading
