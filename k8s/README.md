@@ -14,7 +14,7 @@
 | 优雅退出 | SIGTERM → uvicorn `--timeout-graceful-shutdown=50` → FastAPI lifespan → `broker.stop()` 已 flush+kill 全部子进程 |
 | config.yaml / auth.json | ConfigMap / Secret 用 `subPath` 挂到 `/root/.hermes/`（不覆盖整个镜像基线目录） |
 | 会话状态 | PVC（RWO）挂到 `SESSIONS_ROOT=/var/lib/hermes/sessions` |
-| 动态端口 + Origin 伪造 | pod 内 nginx sidecar 原样保留生产路由（`k8s/nginx-pod.conf`） |
+| 动态端口 + Origin 伪造 | 单容器内 nginx（由 `k8s/entrypoint.sh` 起）原样保留生产路由（`k8s/nginx-pod.conf`） |
 
 ## 文件清单
 
@@ -31,7 +31,7 @@ k8s/
 ├── 20-postgres.yaml             PG StatefulSet（阶段一可不用）
 ├── 21-redis.yaml                Redis StatefulSet（阶段一可不用）
 ├── 30-hermes-svc.yaml           headless Service（StatefulSet + Ingress 后端）
-├── 31-hermes-statefulset.yaml   ★ nginx sidecar + broker 容器（核心）
+├── 31-hermes-statefulset.yaml   ★ 单容器（nginx+broker 由 entrypoint 编排）
 ├── 32-ingress.yaml              TLS + 路由到 pod:80
 ├── 40-extras.yaml               hermes-api / openclaw 占位（镜像待独立构建）
 └── kustomization.yaml           apply 顺序

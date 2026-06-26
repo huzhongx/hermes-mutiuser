@@ -1,7 +1,9 @@
-# ── hermes StatefulSet（阶段一单副本 lift-and-shift）──
-# Pod 含两个容器（共享网络命名空间，故 127.0.0.1 互通）：
-#   nginx  : pod 内动态端口路由 + Origin 伪造（镜像内置 k8s/nginx-pod.conf）
-#   broker : hermes_broker.py，spawn 出的 per-user 进程绑 9119-9200（仅 loopback）
+# ── hermes StatefulSet（阶段一单副本 lift-and-shift，单容器模型）──
+# 单容器内同时跑 nginx + broker（由镜像 ENTRYPOINT = k8s/entrypoint.sh 编排）：
+#   nginx   : pod 内动态端口路由 + Origin 伪造（镜像内置 k8s/nginx-pod.conf）
+#   broker  : uvicorn hermes_broker:app，spawn 出的 per-user 进程绑 9119-9200（仅 loopback）
+#   nginx 与 broker 共享容器网络/loopback；shell(entrypoint) 作为 PID 1，
+#   wait 两个进程，任一退出则整体退出让 kubelet 重启。
 #
 # 不修改 hermes_broker.py —— 全靠挂载/envFrom 实现容器化：
 #   SESSIONS_ROOT  ← ConfigMap（指向 PVC 挂载点）
@@ -9,8 +11,9 @@
 #   .jwt_secret    ← Secret（只读，broker 读到即用、不写回；现有代码已安全）
 #   config.yaml    ← ConfigMap（subPath 挂到 /root/.hermes/config.yaml）
 #   auth.json      ← Secret（subPath 挂到 /root/.hermes/auth.json）
-#   日志           ← 默认 stderr（无需改），k8s 自动采集
-#   优雅退出       ← SIGTERM → uvicorn → lifespan → broker.stop() 已 flush 全部子进程
+#   日志           ← 默认 stderr（PYTHONUNBUFFERED=1），k8s 自动采集
+#   优雅退出       ← SIGTERM → uvicorn(--timeout-graceful-shutdown=50) → lifespan
+#                     → broker.stop() flush 全部子进程；< terminationGracePeriodSeconds(60)
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -26,42 +29,20 @@ spec:
       terminationGracePeriodSeconds: 60   # 给 broker.stop() flush 所有 state.db 留时间
       containers:
 
-        # ── nginx sidecar：动态端口路由 + Origin 伪造 ──
-        - name: nginx
+        # ── 单容器：nginx + broker 由 ENTRYPOINT(k8s/entrypoint.sh) 编排 ──
+        - name: hermes
           image: hermes-platform:phase1
           imagePullPolicy: IfNotPresent
-          command: ["nginx", "-g", "daemon off;"]
-          ports:
-            - { containerPort: 80, name: http }
-          readinessProbe:
-            tcpSocket: { port: 80 }
-            initialDelaySeconds: 3
-            periodSeconds: 10
-          resources:
-            requests: { cpu: 50m, memory: 64Mi }
-            limits:   { cpu: 500m, memory: 256Mi }
-          # 如需不重建镜像调 nginx 配置，启用下面挂载（默认用镜像内置）：
-          # volumeMounts:
-          #   - { name: nginx-conf, mountPath: /etc/nginx/conf.d/hermes-pod.conf, subPath: hermes-pod.conf }
-
-        # ── broker：per-user 进程编排 ──
-        - name: broker
-          image: hermes-platform:phase1
-          imagePullPolicy: IfNotPresent
+          # 不设 command —— 用镜像 ENTRYPOINT(/entrypoint.sh)，它起 nginx + uvicorn broker
           workingDir: /opt/hermes-platform
-          command:
-            - uvicorn
-            - hermes_broker:app
-            - --host=0.0.0.0
-            - --port=8080
-            - --timeout-graceful-shutdown=50   # < terminationGracePeriodSeconds(60)
           env:
             - { name: PYTHONPATH, value: /opt/hermes-platform }
           envFrom:
             - configMapRef: { name: hermes-config }
             - secretRef:    { name: hermes-secret }
           ports:
-            - { containerPort: 8080, name: broker }
+            - { containerPort: 80,   name: http }     # nginx（Ingress 入口）
+            - { containerPort: 8080, name: broker }   # broker（pod 内 nginx 反代到此）
             # 9119-9200 动态分配，不声明（仅 loopback，pod 内 nginx 可达）
           volumeMounts:
             - { name: sessions,    mountPath: /var/lib/hermes/sessions }                       # = SESSIONS_ROOT
@@ -70,7 +51,7 @@ spec:
             - { name: jwt-secret,  mountPath: /opt/hermes-platform/.jwt_secret, subPath: jwt }
           readinessProbe:
             httpGet: { path: /broker/health, port: 8080 }
-            initialDelaySeconds: 10
+            initialDelaySeconds: 10        # nginx + broker 冷启动（含 hermes-agent spawn）需时间
             periodSeconds: 10
             failureThreshold: 6
           livenessProbe:
@@ -79,7 +60,7 @@ spec:
             periodSeconds: 20
             failureThreshold: 3
           resources:
-            # broker 托管所有 per-user 进程，按实测调；先给宽裕上限
+            # 单容器托管 nginx + broker + 所有 per-user 进程，按实测调；先给宽裕上限
             requests: { cpu: 500m, memory: 2Gi }
             limits:   { cpu: "4",  memory: 12Gi }
 
@@ -94,8 +75,6 @@ spec:
           secret:
             secretName: hermes-jwt
             items: [ { key: jwt, path: jwt } ]
-        # - name: nginx-conf          # 启用见上
-        #   configMap: { name: hermes-nginx }
 
   volumeClaimTemplates:
     - metadata:
