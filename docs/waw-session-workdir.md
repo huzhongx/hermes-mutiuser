@@ -119,17 +119,61 @@ POST https://<domain>/hermes/dash/9123/api/files/mkdir
  │ WS prompt.submit(sid, ...) ──────────────────────────►│  产物 → user_root/sid/
 ```
 
-## 下载产物
+## 文件操作:走 hermes 进程原生接口
 
-产物在 `{user_root}/{sid}/file`,下载用 broker 接口(支持三种路径形态):
+所有文件操作(下载/上传/建目录)走 **hermes 进程原生接口**,经 nginx `/hermes/dash/{port}/` 直连该用户的 hermes 进程。broker 已给每个进程注入 `HERMES_DASHBOARD_FILES_ROOT={user_root}`,把 hermes 的 managed-files root **锁定到该用户工作区**——越权访问(如 `/etc/passwd`、broker 的 `.env`)会被 `_path_is_under()` 拦截返回 403。
+
+### 基础 URL 与鉴权
 
 ```http
-GET https://<domain>/api/files/download/{user_id}/{sid}/{filename}
+https://<domain>/hermes/dash/{port}/api/files/...
 ```
 
-- **相对 user_root**(推荐):`{sid}/{filename}`
-- **绝对路径**:`/tmp/hermes_sessions/{user_id}/{sid}/{filename}`
-- 都经 broker(`:8080`),JWT/会话鉴权。
+- `{port}`:`POST /broker/sessions` 返回的 `port`(9119-9200)
+- 鉴权(任选其一):
+  - `Authorization: Bearer <ws_token>`
+  - `X-Hermes-Session-Token: <ws_token>` header
+  - `?token=<ws_token>` query(适合浏览器直接打开的下载链接)
+- `path` 参数一律用**绝对路径**(在 `{user_root}` 下)
+
+### 下载产物
+
+```http
+GET https://<domain>/hermes/dash/{port}/api/files/download?path={user_root}/{sid}/{filename}&token=<ws_token>
+```
+
+示例:
+```http
+GET /hermes/dash/9123/api/files/download?path=/tmp/hermes_sessions/waw:cmq0q04ye...:workspace:talent/487d3edc/talent_360_report.html&token=W4l3H8...
+```
+
+- `path` 必须在 `{user_root}` 下(否则 403)
+- 返回 `attachment`(图片类自动 inline)
+- 大小上限 100MB(`_MANAGED_FILE_MAX_BYTES`)
+
+### 建目录(步骤 2 用的就是这个)
+
+```http
+POST https://<domain>/hermes/dash/{port}/api/files/mkdir
+Authorization: Bearer <ws_token>
+Content-Type: application/json
+
+{ "path": "{user_root}/{sid}" }
+```
+
+### 上传文件
+
+```http
+POST https://<domain>/hermes/dash/{port}/api/files/upload
+Authorization: Bearer <ws_token>
+Content-Type: multipart/form-data
+
+file: <binary>
+```
+
+### 不要再用 broker 的文件接口
+
+旧的 `GET /api/files/download/{path}`(走 broker :8080)**已废弃**,前端应迁移到上面的 hermes 原生接口。broker 文件接口仅作过渡保留。
 
 ## 注意事项 / 约束
 
@@ -138,16 +182,18 @@ GET https://<domain>/api/files/download/{user_id}/{sid}/{filename}
 2. `session.create` 和 `session.cwd.set` 的 `cwd` 都要求**目录已存在**,所以 mkdir 不能省。
 3. 一个用户**一个活跃进程**,但可以有**多个 hermes session**(每个 session 独立目录)。切换 session 时重复步骤 1-3(新 sid → 新目录)。
 4. `hermes_home/` 是用户级共享(配置/技能/state.db),**不要**当产物目录。
+5. **文件操作必须带 port**(每个用户进程端口不同);`port` 从 `/broker/sessions` 返回值取。
 
 ## 鉴权
 
-- broker `/api/files/download`、`/broker/sessions`:JWT cookie(`hermes_session`)优先,fallback `X-Hermes-Session-Token` header / `X-User-ID` / body.user_id。
-- hermes `/api/files/mkdir`、WS:`Authorization: Bearer <ws_token>`(或 WS URL 的 `?token=`)。
+- `POST /broker/sessions`:JWT cookie(`hermes_session`)优先,fallback `X-Hermes-Session-Token` header / `X-User-ID` / body.user_id。
+- hermes 原生文件接口 + WS:`Authorization: Bearer <ws_token>` 或 `X-Hermes-Session-Token` header(或下载链接的 `?token=`)。
 
 ## 验证清单(接入后自测)
 
 - [ ] `session.create` 返回的 `session_id` 非空(8 位 hex)
-- [ ] `mkdir` 返回 `ok:true`,目录实际存在
+- [ ] `mkdir`(hermes 原生)返回 `ok:true`,目录实际存在
 - [ ] `session.cwd.set` 返回的 `cwd` = `{user_root}/{sid}`
 - [ ] 让 agent 写个文件(如 `open('test.txt','w')`),文件落在 `{user_root}/{sid}/test.txt`
-- [ ] 下载 `{user_root}/{sid}/test.txt` 返回 200
+- [ ] 下载 `{user_root}/{sid}/test.txt` 经 hermes 原生接口(`/hermes/dash/{port}/api/files/download`)返回 200
+- [ ] 越权下载 `/etc/passwd` 返回 **403**(验证 locked_root 生效)
