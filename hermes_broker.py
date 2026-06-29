@@ -1639,7 +1639,11 @@ async def download_files(file_path: str, request: Request):
     candidates.append(user_root / stripped)
     if proc.work_dir:
         candidates.append(Path(proc.work_dir) / stripped)
-        candidates.append(Path(proc.work_dir).parent / "uploads" / Path(stripped).name)
+        # proc.work_dir is the user base ({work_root}/{user_id}); uploads/ lives
+        # directly under it. (Previously work_dir was {user_base}/{session_id} and
+        # uploads was reached via .parent — no longer correct after the two-level
+        # work_dir change.)
+        candidates.append(Path(proc.work_dir) / "uploads" / Path(stripped).name)
     fpath: Path | None = None
     for c in candidates:
         hit = _under_user_root(c)
@@ -1748,7 +1752,10 @@ async def proxy_skill_upload(request: Request):
         raise HTTPException(status_code=400, detail="Only .zip files are supported")
 
     # Determine skills directory: {hermes_home}/skills/
-    user_home = Path(proc.work_dir).parent / "hermes_home"
+    # NB: proc.work_dir IS the user base now ({work_root}/{user_id}), so derive
+    # hermes_home from work_root/user_id — not work_dir.parent (which would drop
+    # the user_id segment and yield {work_root}/hermes_home).
+    user_home = Path(broker.work_root) / proc.user_id / "hermes_home"
     skills_dir = user_home / "skills"
     skills_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1828,7 +1835,7 @@ async def proxy_skill_upload(request: Request):
 async def proxy_skills_list(request: Request):
     """List skills with system/user classification. Syncs new system skills automatically."""
     proc = await _proc_for_request(request)
-    user_home = Path(proc.work_dir).parent / "hermes_home"
+    user_home = Path(broker.work_root) / proc.user_id / "hermes_home"
     user_skills_dir = user_home / "skills"
     global_skills_dir = _HERMES_CONFIG_HOME / "skills"
 
@@ -1891,7 +1898,7 @@ async def proxy_skills_list(request: Request):
 async def proxy_skill_delete(skill_name: str, request: Request):
     """Delete a user-installed skill."""
     proc = await _proc_for_request(request)
-    user_home = Path(proc.work_dir).parent / "hermes_home"
+    user_home = Path(broker.work_root) / proc.user_id / "hermes_home"
     skill_path = user_home / "skills" / skill_name
 
     if not skill_path.exists():
