@@ -473,6 +473,15 @@ class ProcessBroker:
             proc_env = os.environ.copy()
             proc_env["HERMES_HOME"] = str(user_home)
             proc_env["HERMES_WRITE_SAFE_ROOT"] = str(work_dir)
+            # Lock the Hermes dashboard's managed-files root to this user's
+            # work_root (user_base). Without it, _managed_files_policy() leaves
+            # locked_root=None (because the install root isn't /opt/data), and
+            # the dashboard's /api/files/download?path= becomes an arbitrary-
+            # file-read (any logged-in user can read /etc/passwd, the broker's
+            # .env, etc.). Locking to {user_base} makes the dashboard's native
+            # file endpoints (download/upload/mkdir) safe to expose directly to
+            # the frontend, enforced by _path_is_under().
+            proc_env["HERMES_DASHBOARD_FILES_ROOT"] = str(work_dir)
             proc_env["HERMES_NGINX_DOMAIN"] = os.environ.get("HERMES_NGINX_DOMAIN", "")
             # Inject OPENAI_BASE_URL + OPENAI_API_KEY so the auxiliary client
             # (vision, title gen, etc.) can resolve the "custom" provider.
