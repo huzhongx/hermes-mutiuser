@@ -288,11 +288,13 @@ class ProcessBroker:
         else:
             await self._kill(proc)
         self._free_port(proc.port)
-        # Only clean up logs, preserve user-generated files in work_dir
-        if proc.work_dir and os.path.exists(proc.work_dir):
-            logs_dir = Path(proc.work_dir) / "logs"
-            if logs_dir.is_dir():
-                shutil.rmtree(logs_dir, ignore_errors=True)
+        # Only clean up this process's own broker log; preserve everything
+        # else under work_dir (= user base, shared across sessions/restarts).
+        if proc.work_dir and proc.port:
+            try:
+                (Path(proc.work_dir) / ".broker-logs" / f"session-{proc.port}.log").unlink(missing_ok=True)
+            except OSError:
+                pass
 
     def get(self, user_id: str) -> Optional[HermesProcess]:
         return self._procs.get(user_id)
@@ -395,22 +397,23 @@ class ProcessBroker:
 
         user_base = self.work_root / (user_id if user_id != "__warm__" else "__warm__")
 
+        # The Hermes process works directly under the user base. Per-session
+        # work subdirectories ({user_id}/{hermes_session_id}/) are created and
+        # selected by the frontend via session.create → mkdir → session.cwd.set,
+        # NOT by the broker. See plan: two-level {user_id}/{hermes_sid}/ layout.
+        # session_id here is only a process-instance label (no disk directory).
         if session_id is None:
-            # Reuse existing orphan work_dir if any (survives broker restart)
-            if user_base.is_dir():
-                existing_dirs = sorted(
-                    (d for d in user_base.iterdir() if d.is_dir() and d.name not in ("hermes_home",)),
-                    key=lambda d: d.stat().st_mtime,
-                    reverse=True,
-                )
-                session_id = existing_dirs[0].name if existing_dirs else str(uuid.uuid4())
-            else:
-                session_id = str(uuid.uuid4())
+            session_id = str(uuid.uuid4())
 
-        work_dir = user_base / session_id
+        work_dir = user_base
         work_dir.mkdir(parents=True, exist_ok=True)
-        logs_dir = work_dir / "logs"
-        logs_dir.mkdir(exist_ok=True)
+        # Per-process broker log (stdout/stderr redirect). Suffix by port so
+        # multiple spawns for the same user don't clobber each other. Lives
+        # under a dot-dir inside user_base so it's never confused with a
+        # hermes session work subdir.
+        logs_dir = work_dir / ".broker-logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        session_log = logs_dir / f"session-{port}.log"
 
         # Stable per-user HERMES_HOME (survives reconnects)
         # Path: {work_root}/{user_id}/hermes_home
@@ -468,7 +471,7 @@ class ProcessBroker:
 
         log_fh = None
         try:
-            log_fh = open(logs_dir / "session.log", "a")
+            log_fh = open(session_log, "a")
 
             proc_env = os.environ.copy()
             proc_env["HERMES_HOME"] = str(user_home)
@@ -509,8 +512,12 @@ class ProcessBroker:
             logger.error(f"[{user_id}] 启动失败: {e}")
             await self._kill(proc)
             self._free_port(port)
-            if work_dir.exists():
-                shutil.rmtree(work_dir, ignore_errors=True)
+            # Only remove this spawn's own log file; NEVER rmtree work_dir —
+            # work_dir is the user base (shared across sessions/restarts).
+            try:
+                session_log.unlink(missing_ok=True)
+            except OSError:
+                pass
             if log_fh:
                 log_fh.close()
             raise
@@ -660,10 +667,11 @@ class ProcessBroker:
                     if proc:
                         await self._flush_and_kill(proc)
                         self._free_port(proc.port)
-                        if proc.work_dir and os.path.exists(proc.work_dir):
-                            logs_dir = Path(proc.work_dir) / "logs"
-                            if logs_dir.is_dir():
-                                shutil.rmtree(logs_dir, ignore_errors=True)
+                        if proc.work_dir and proc.port:
+                            try:
+                                (Path(proc.work_dir) / ".broker-logs" / f"session-{proc.port}.log").unlink(missing_ok=True)
+                            except OSError:
+                                pass
                     self._drain_progress[uid] = "done"
                 except Exception as e:
                     logger.error(f"[drain] Failed to drain {uid}: {e}")
