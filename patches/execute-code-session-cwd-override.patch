@@ -1,0 +1,50 @@
+diff --git a/tools/code_execution_tool.py b/tools/code_execution_tool.py
+index 5749b224b..432861326 100644
+--- a/tools/code_execution_tool.py
++++ b/tools/code_execution_tool.py
+@@ -1280,7 +1280,7 @@ def execute_code(
+         # Env scrubbing and tool whitelist apply identically in both modes.
+         _mode = _get_execution_mode()
+         _child_python = _resolve_child_python(_mode)
+-        _child_cwd = _resolve_child_cwd(_mode, tmpdir)
++        _child_cwd = _resolve_child_cwd(_mode, tmpdir, task_id=task_id or "")
+         _script_path = os.path.join(tmpdir, "script.py")
+ 
+         proc = subprocess.Popen(
+@@ -1684,17 +1684,31 @@ def _resolve_child_python(mode: str) -> str:
+     return sys.executable
+ 
+ 
+-def _resolve_child_cwd(mode: str, staging_dir: str) -> str:
++def _resolve_child_cwd(mode: str, staging_dir: str, task_id: str = "") -> str:
+     """Resolve the working directory for the execute_code subprocess.
+ 
+     - ``strict``: the staging tmpdir (today's behavior).
+-    - ``project``: the session's TERMINAL_CWD (same as the terminal tool), or
+-      ``os.getcwd()`` if TERMINAL_CWD is unset or doesn't point at a real dir.
+-      Falls back to the staging tmpdir as a last resort so we never invoke
+-      Popen with a nonexistent cwd.
++    - ``project``: the session's working directory. Resolution order:
++      1. the session cwd override registered by ``session.cwd.set`` (frontend
++         per-session workspace) — looked up by ``task_id`` so each session's
++         execute_code lands in its own workspace, not the process launch dir;
++      2. ``TERMINAL_CWD`` (process-wide, as before);
++      3. ``os.getcwd()``;
++      4. the staging tmpdir as a last resort (never Popen a nonexistent cwd).
+     """
+     if mode != "project":
+         return staging_dir
++    # 1. Session cwd override (registered via session.cwd.set → register_task_env_overrides).
++    # Without this, execute_code's sandbox ignores the per-session workspace and
++    # writes to the process launch dir, so files from different sessions mix.
++    if task_id:
++        try:
++            from tools.file_tools import _registered_task_cwd_override
++            sess_cwd = _registered_task_cwd_override(task_id)
++            if sess_cwd and os.path.isdir(sess_cwd):
++                return sess_cwd
++        except Exception:
++            pass
+     raw = os.environ.get("TERMINAL_CWD", "").strip()
+     if raw:
+         expanded = os.path.expanduser(raw)
