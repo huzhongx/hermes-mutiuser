@@ -104,6 +104,69 @@ tc qdisc del dev lo root          # 清除
   2. **前端减少请求轮次**(串行→并行,或聚合接口)—— 前端侧
   3. **连接预热**(`<link rel="preconnect">`)—— 前端侧
 
+## TCP 层优化:BBR(跨海加速,2026-07-02 追加)
+
+服务器在新加坡(腾讯云),前端机在北京(阿里云),**ping RTT 196ms**(中新跨海)。
+原 TCP 拥塞控制 `cubic`,跨海易丢包 → cubic 把拥塞窗口砍半,实测北京方向连接吞吐仅
+**几百 Kbps ~ 1Mbps**(`ss -ti` 显示 `cwnd:10, send 590kbps`)。
+
+改用 **BBR**(Bottleneck Bandwidth and RTT):基于带宽探测而非丢包,跨海高 RTT 链路吞吐显著提升。
+
+### 实施(`/etc/sysctl.d/99-bbr-crosssea.conf`,运行时 + 持久化)
+
+```conf
+net.core.default_qdisc = fq                    # BBR 推荐配 fq 做 pacing
+net.ipv4.tcp_congestion_control = bbr
+net.core.rmem_max = 16777216                   # 16MB, 适配跨海高 BDP
+net.core.wmem_max = 16777216
+net.ipv4.tcp_rmem = 4096 87380 16777216
+net.ipv4.tcp_wmem = 4096 65536 16777216
+net.ipv4.tcp_mtu_probing = 1                   # 跨海 MTU 黑洞探测
+```
+
+运行时启用:`sysctl -w ...`(立即生效)+ `modprobe tcp_bbr`(加载模块)。
+**注意:只对新连接生效**,老连接维持原算法直到断开。
+
+### 验证
+
+新建立的连接 `ss -ti` 显示 `bbr:(bw:..., mrtt:..., pacing_gain:...)` 内部状态,
+`cwnd:33`(vs cubic 的 10)。新连接 11 bbr / 13 cubic(老连接)。
+
+### 收益
+
+- 跨海大响应传输(技能列表、文件上传/下载、流式 SSE)吞吐提升 —— cubic 在丢包时砍半,
+  BBR 保持高带宽
+- 对**小 API 请求**(`/api/config` 5ms 服务端)的直接延迟影响小(RTT 不变),但
+  传输大 body(gzip 后仍 5KB)时受益
+
+## 还能做什么(新加坡位置相关,更高层方案)
+
+BBR + nginx TLS 优化已把**本机侧**能做的做尽。剩下的是位置/架构层面的:
+
+### 1. 国内 CDN/反向代理中转(强烈推荐,收益最大)
+新加坡服务器直连国内用户,跨海 + 国际出口拥塞。在国内放一个 CDN/反代节点(腾讯云 CDN、
+阿里云 CDN、或自建香港/广州中转),让用户先打到**国内节点**(<20ms),再由国内节点经
+**优化线路**(腾讯云/阿里云的内网或优化公网)到新加坡。
+
+- 域名解析从 `43.160.236.160`(直连)改为 CDN CNAME
+- CDN 回源到新加坡,走云厂商优化线路(比普通公网稳定快)
+- **静态资源**(chat.html、JS/CSS)CDN 直接边缘缓存,0 回源
+- **动态 API** 走 CDN 的动态加速(腾讯云 DSA / 阿里云全站加速),利用其优化路由
+
+### 2. WebSocket 长连接保活(减少重连握手)
+hermes 的 WS(对话流)跨海易断。nginx 已有 `proxy_http_version 1.1`,但需确保:
+- WS 的 read/send timeout 调大(防跨海空闲断开)
+- 开 `proxy_socket_keepalive`(内核级 TCP keepalive)
+- 前端断线重连用指数退避,复用 session.resume
+
+### 3. 部署就近(根治,但成本高)
+把 hermes 整体迁到国内(前端机同区北京),RTT <1ms,所有慢问题消失。
+代价:数据合规、模型 API 出口、运维迁移。
+
+### 4. HTTP/3 (QUIC)
+nginx 1.24 需编译 QUIC 模块(或换 nginx-quic/Caddy)。QUIC 在弱网/丢包下比 TCP+HTTP/2 快,
+跨海收益有限(RTT 不变),但连接迁移(切网络不断连)+ 0-RTT 更彻底。复杂度高,收益不如 1。
+
 ## 回滚
 
 备份在 `/tmp/openclaw.conf.bak.*` 和 `/tmp/nginx.conf.bak.*`。回滚:
