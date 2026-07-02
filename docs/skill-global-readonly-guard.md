@@ -177,4 +177,55 @@ broker spawn 的每个 dashboard 进程 import 这两个模块,故 **重启 brok
 场景;execute_code/terminal 直写需用户主动构造路径且具备引导 agent 跑代码的能力,威胁等级取决于
 用户可信度(内部团队 vs 公开租户)。待威胁模型升级时再做内核级隔离。
 
+## 第三道闸:文件系统不可变(`chattr +i`,内核级硬边界)
+
+上面两道应用层闸拦不住 execute_code/terminal 的子进程 syscall(见"残留边界")。最终通过
+`chattr +i` 给全局技能本体加**内核级不可变属性**补上:root 也写不了,内核强制(EPERM),
+对所有进程(含已运行的 dashboard、沙箱子进程)即时生效,无需重启 broker。
+
+### 实现(`scripts/skill_tree_immutable.sh`)
+
+精确锁定**技能本体目录**(含 SKILL.md 的目录,共 54 个,含 productivity/research/software-development
+等类别下的子技能),**递归** `chattr -R +i`。跳过运行时要写的元数据/缓存,确保功能不 break:
+
+| 跳过项 | 原因 |
+|---|---|
+| `.hub/`(index-cache/lock.json/audit.log) | skill hub 索引,运行时写 |
+| `.archive/` `.curator_backups/` | curator 归档 |
+| `.curator_state` `.bundled_manifest` `.usage.json` | curator/usage 运行时状态 |
+| `__pycache__` | Python 运行时生成 |
+| `credential-bootstrap.py` | 运维脚本 |
+
+子命令:
+```bash
+scripts/skill_tree_immutable.sh lock     # 锁定全局技能本体
+scripts/skill_tree_immutable.sh unlock   # 解锁(运维升级前调用)
+scripts/skill_tree_immutable.sh status   # 查看锁定状态
+scripts/skill_tree_immutable.sh list     # dry-run 列出将锁的目录
+```
+
+### 运维升级全局技能的流程
+
+```bash
+scripts/skill_tree_immutable.sh unlock                    # 1. 解锁
+# 2. 编辑 /root/.hermes/skills/... (复制源技能、改 SKILL.md 等)
+scripts/skill_tree_immutable.sh lock                      # 3. 重新锁定
+# 4. 新建/重连的 session 会加载新内容;已运行 session 需重连或 reload.mcp
+```
+
+### 验证(ext4,已上线)
+
+- 锁定 54 个技能本体目录,读写分离:读取/遍历(`os.walk followlinks=True`)正常,**写入/删除/建文件全部 EPERM** ✅
+- execute_code `open()`、terminal `echo >>` 直写锁定技能 → **内核拒绝** ✅(应用层闸拦不到的子进程 syscall,被内核拦下)
+- 用户创建私有技能(`skill_manage create` 写私有根)→ **正常** ✅(不受全局锁影响)
+- `.hub`/curator/usage 等运行时目录 → **仍可写** ✅(功能不回归)
+- 对**已运行**的 dashboard 进程即时生效,无需重启 broker
+
+### 边界(诚实记录)
+
+`+i` 是当前部署下最硬的边界(ext4 支持)。理论上需 CAP_LINUX_IMMUTABLE 的进程仍可 `chattr -i`
+解锁——但 broker/沙箱进程没有这个 capability(`chattr` 需 root + 该 cap,普通沙箱代码调
+`os.chflags` 会被拒)。所以对租户进程 = 不可写。唯一能解锁的是有 root+cap 的运维操作。
+
+
 
