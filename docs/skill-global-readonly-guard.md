@@ -100,8 +100,58 @@ export HERMES_SKILLS_WRITABLE_GLOBAL=1
 `_create_skill` 写入 `SKILLS_DIR = HERMES_HOME/skills` = 用户私有根,天然不碰全局本体,
 故无需守卫。用户可以自由创建私有技能 —— 这是受允许的功能。
 
+## 第二道闸:file / patch / execute_code 工具(`agent/file_safety.py`)
+
+skill_manage 守卫只覆盖**那一个工具**的写动作。但 agent 还有 `file`/`file_operations`/`patch`
+/`execute_code` 等工具能直接 `open(path, 'w')`,它们走的是另一条统一闸口
+`agent/file_safety.py::is_write_denied(path)`,**完全不过 skill_manage 守卫**。实测:软链技能路径
+`<user_home>/skills/<name>/SKILL.md` 会被 `is_write_denied` 放行(realpath 解析到全局本体,但原
+黑名单不含普通技能),内核跟随软链写入 → 同样能改全局。
+
+因此同一判据必须在 `is_write_denied` 上再设一道(纵深防御,与 skill_manage 守卫互为兜底)。
+
+### file_safety 侧的实现
+
+`is_write_denied` 现已带软链逃逸检测(内联,在原黑名单/safe_root 检查之间):
+
+```python
+# 呈现路径(raw, 不跟随软链)是否在 skills 命名空间内?
+presented_in_skills_ns = abspath(raw) 在 private_skills_root 内
+# 真实路径(跟随软链)是否逃出私有根?
+resolved_inside = resolved 在 private_skills_root 内
+if presented_in_skills_ns and not resolved_inside:
+    return True   # 软链逃逸 → 全局技能 → 拒绝
+```
+
+关键点:
+- **同时需要 `raw`(原始路径)和 `resolved`(realpath)**。只看 resolved 无法区分"软链技能"
+  和"用户项目里碰巧叫 skills 的目录"(`abspath(raw)` 在 ns 内、`resolved` 也在内 → 真实私有,放行)。
+- **`_hermes_root_path()` 在 broker 下不可用作全局锚点**:broker 把 `HERMES_HOME` 设成 user_home,
+  `get_default_hermes_root()` 会返回 user_home(非 `/root/.hermes`)。所以判据用"私有根内/外"
+  而非"是否在全局根内"。
+- escape hatch `HERMES_SKILLS_WRITABLE_GLOBAL=1` 同时让本守卫和 safe_root 检查放行(hatch 全开)。
+
+### 验证(broker venv,真实用户目录)
+
+- 软链技能 SKILL.md / 子文件 / 直接全局路径 → **全部拒绝** ✅
+- 工作区普通文件、uploads、用户项目里叫 skills 的目录 → **放行**(不回归)✅
+- 原有黑名单(`.hub`、`.ssh`)→ **仍拒绝**(不回归)✅
+- `HERMES_SKILLS_WRITABLE_GLOBAL=1` → **放行** ✅
+
 ## 生效方式
 
-补丁就地修改 `/root/.hermes/hermes-agent/tools/skill_manager_tool.py`。broker spawn 的每个
-dashboard 进程 import 该模块,故 **重启 broker 后**所有新会话的 agent 工具调用即受保护。
+补丁就地修改两个文件:
+- `/root/.hermes/hermes-agent/tools/skill_manager_tool.py`(skill_manage 闸)
+- `/root/.hermes/hermes-agent/agent/file_safety.py`(file/patch/execute_code 闸)
+
+broker spawn 的每个 dashboard 进程 import 这两个模块,故 **重启 broker 后**所有新会话即受双重保护。
 重启流程见 memory `reference_broker_restart.md`(需 `env -i` 防 Claude Code 环境污染)。
+
+## 残留边界(诚实记录)
+
+这两道闸覆盖了 agent 的**结构化写工具**(skill_manage / file / patch)。但 `execute_code`
+沙箱里用户自己写的 Python(`open('/tmp/.../skills/x/SKILL.md','w')`)走的是沙箱进程的系统调用,
+不经过 `is_write_denied`。这条路由 `HERMES_WRITE_SAFE_ROOT` + 沙箱 cwd 约束兜底(技能软链路径在
+safe_root 内,但沙箱若不限制到 hermes_home 之外仍可能触达)。若要把多租户当硬安全边界,
+最终解仍是 bind-mount ro(内核强制),应用层守卫是其下方的纵深防御。
+

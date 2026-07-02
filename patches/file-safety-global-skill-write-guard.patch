@@ -1,0 +1,74 @@
+diff --git a/agent/file_safety.py b/agent/file_safety.py
+index 7a70f9641..a1ae9ba65 100644
+--- a/agent/file_safety.py
++++ b/agent/file_safety.py
+@@ -88,10 +88,23 @@ def get_safe_write_root() -> Optional[str]:
+         return None
+ 
+ 
++def _is_global_skill_writable_check() -> bool:
++    """True when the operator has opted this process into writing global skills.
++
++    Mirrors the ``HERMES_SKILLS_WRITABLE_GLOBAL`` escape hatch used by
++    ``skill_manager_tool._managed_skill_write_guard``. When set, file/patch/
++    execute_code writes into the global skills root are allowed (platform
++    operator curating the shared tree); otherwise they are denied.
++    """
++    val = os.getenv("HERMES_SKILLS_WRITABLE_GLOBAL", "")
++    return val.lower() in ("1", "true", "yes", "on")
++
++
+ def is_write_denied(path: str) -> bool:
+     """Return True if path is blocked by the write denylist or safe root."""
+     home = os.path.realpath(os.path.expanduser("~"))
+-    resolved = os.path.realpath(os.path.expanduser(str(path)))
++    raw = os.path.expanduser(str(path))
++    resolved = os.path.realpath(raw)
+ 
+     if resolved in build_write_denied_paths(home):
+         return True
+@@ -124,9 +137,43 @@ def is_write_denied(path: str) -> bool:
+         except Exception:
+             pass
+ 
++    # Global skills are read-only for tenants. The broker exposes system skills
++    # as a symlink under the tenant's HERMES_HOME/skills/. A write that is
++    # *presented* inside the skills namespace but whose realpath escapes it is
++    # a write to the shared global tree (via the symlink). Refuse it — the
++    # matching skill_manage gate only covers that one tool. The escape hatch
++    # HERMES_SKILLS_WRITABLE_GLOBAL opts a process out (platform operator).
++    if not _is_global_skill_writable_check():
++        try:
++            private_skills_root = (_hermes_home_path() / "skills").resolve()
++            # Presented path (raw, before symlink resolution) under skills ns?
++            # Use abspath (no symlink follow) so a symlinked skill still counts
++            # as "presented under skills/". realpath(raw) would follow the link
++            # and falsely report it as outside.
++            try:
++                Path(os.path.abspath(raw)).relative_to(private_skills_root)
++                presented_in_skills_ns = True
++            except ValueError:
++                presented_in_skills_ns = False
++            # Real location outside the private skills root => symlink escape.
++            try:
++                Path(resolved).relative_to(private_skills_root)
++                resolved_inside = True
++            except ValueError:
++                resolved_inside = False
++            if presented_in_skills_ns and not resolved_inside:
++                return True
++        except Exception:
++            pass
++
+     safe_root = get_safe_write_root()
+     if safe_root and not (resolved == safe_root or resolved.startswith(safe_root + os.sep)):
+-        return True
++        # The global-skills-writable escape hatch (HERMES_SKILLS_WRITABLE_GLOBAL)
++        # lets a platform-operator process write the shared skills tree, whose
++        # real path lives outside the tenant's safe_root. Honor it here so the
++        # hatch fully opens the path.
++        if not _is_global_skill_writable_check():
++            return True
+ 
+     return False
+ 
