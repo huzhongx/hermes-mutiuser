@@ -57,6 +57,69 @@ _HERMES_CONFIG_HOME = Path(os.environ.get("HERMES_HOME", "/root/.hermes"))
 
 TOKEN_RE = re.compile(r'__HERMES_SESSION_TOKEN__\s*=\s*"([^"]+)"')
 
+# ─────────────────────────────────────────────────────────
+# Space-type skill blacklisting
+# ─────────────────────────────────────────────────────────
+# A waw user_id encodes its workspace type as the trailing segment after
+# ``:workspace:``, e.g. ``waw:<cuid>:workspace:talent``. Some global skills
+# are only relevant to certain space types (mock-interview is talent-only,
+# must be hidden from hiring). The per-user ``.skipped/{skill}`` opt-out is
+# a user-level manual control that does NOT propagate to future spawns of
+# the same space type. This blacklist makes space-type-level hiding durable:
+# any user whose space type lists a skill here will never be symlinked that
+# skill on spawn or on proxy_skills_list sync. Maintained by the operator in
+# {_SPACE_BLACKLIST_FILE} as {"<space_type>": ["skill-name", ...]}.
+_SPACE_BLACKLIST_FILE = _HERMES_CONFIG_HOME / "skills_space_blacklist.json"
+_SPACE_BLACKLIST_CACHE: dict[str, dict[str, list[str]]] = {"mtime": 0.0, "data": {}}
+
+
+def _parse_space_type(user_id: str) -> str | None:
+    """Return the workspace type encoded in a waw user_id, or None.
+
+    ``waw:<cuid>:workspace:talent`` -> ``"talent"``. Plain/test user_ids
+    without ``:workspace:`` (e.g. ``huzhongx``, ``test_a``) -> None, meaning
+    no space-type restriction applies.
+    """
+    if not user_id or ":workspace:" not in user_id:
+        return None
+    return user_id.rsplit(":workspace:", 1)[-1] or None
+
+
+def _load_space_blacklist() -> dict[str, list[str]]:
+    """Load (and cache) the space-type skill blacklist, keyed by space type.
+
+    Reloads when the config file mtime changes so operator edits take effect
+    on the next spawn/sync without a broker restart.
+    """
+    try:
+        mtime = _SPACE_BLACKLIST_FILE.stat().st_mtime
+    except OSError:
+        _SPACE_BLACKLIST_CACHE["mtime"] = 0.0
+        _SPACE_BLACKLIST_CACHE["data"] = {}
+        return {}
+    if mtime != _SPACE_BLACKLIST_CACHE["mtime"]:
+        try:
+            with open(_SPACE_BLACKLIST_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                data = {}
+            data = {str(k): list(v) for k, v in data.items() if isinstance(v, (list, tuple))}
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning("space blacklist parse failed (%s): %s", _SPACE_BLACKLIST_FILE, exc)
+            data = {}
+        _SPACE_BLACKLIST_CACHE["mtime"] = mtime
+        _SPACE_BLACKLIST_CACHE["data"] = data
+    return _SPACE_BLACKLIST_CACHE["data"]
+
+
+def _is_space_blacklisted(user_id: str, skill_name: str) -> bool:
+    """True if ``skill_name`` is blacklisted for ``user_id``'s space type."""
+    space = _parse_space_type(user_id)
+    if not space:
+        return False
+    blacklist = _load_space_blacklist().get(space, [])
+    return skill_name in blacklist
+
 
 @dataclass
 class HermesProcess:
@@ -442,7 +505,10 @@ class ProcessBroker:
                 os.symlink(src, dst)
 
         # Skills: symlink system skills from global HERMES_HOME
-        # Skip skills that user has opted out of via .skipped/{skill_name}
+        # Skip skills that user has opted out of via .skipped/{skill_name},
+        # or that are blacklisted for this user's space type (see
+        # skills_space_blacklist.json — e.g. mock-interview is hidden from
+        # the hiring space type).
         for dname in ("skills",):
             src = _HERMES_CONFIG_HOME / dname
             dst = user_home / dname
@@ -452,6 +518,8 @@ class ProcessBroker:
                 for skill_entry in src.iterdir():
                     if skill_entry.is_dir():
                         if (skip_dir / skill_entry.name).exists():
+                            continue
+                        if _is_space_blacklisted(user_id, skill_entry.name):
                             continue
                         os.symlink(str(skill_entry), str(dst / skill_entry.name))
 
@@ -1848,8 +1916,17 @@ async def proxy_skills_list(request: Request):
             if not skill_entry.is_dir():
                 continue
             user_skill = user_skills_dir / skill_entry.name
-            # Skip if user has explicitly opted out of this system skill
-            if (_skip_dir / skill_entry.name).exists():
+            # Skip if user has explicitly opted out of this system skill,
+            # or it is blacklisted for this user's space type.
+            blacklisted = _is_space_blacklisted(proc.user_id, skill_entry.name)
+            if (_skip_dir / skill_entry.name).exists() or blacklisted:
+                # If blacklisted but a stale symlink/dir is still present
+                # (e.g. blacklisted after the skill was already synced),
+                # remove it so the space-type hiding actually takes effect.
+                if blacklisted and user_skill.is_symlink():
+                    user_skill.unlink()
+                    logger.info(f"[{proc.user_id}] Removed space-blacklisted skill: {skill_entry.name}")
+                    needs_reload = True
                 continue
             if not user_skill.exists():
                 os.symlink(str(skill_entry), str(user_skill))
@@ -1886,10 +1963,40 @@ async def proxy_skills_list(request: Request):
         skills_data = await resp.json()
     skills_list = skills_data if isinstance(skills_data, list) else skills_data.get("skills", [])
 
-    # Mark each skill as system or user
+    # Mark each skill as system or user.
+    # Skills reach the user in two shapes:
+    #   (a) a top-level symlink directly under skills/ (skills/<name> → global),
+    #       e.g. system skills synced one-per-symlink;
+    #   (b) accessed through a category-directory symlink (skills/<category> →
+    #       global/<category>), so skills/<category>/<name> is NOT itself a
+    #       symlink even though it ultimately lives in the global tree.
+    # So is_symlink() alone is wrong for (b): official skills under
+    # productivity/ would read as user-installed. Resolve to the real path and
+    # check whether it escapes the global skills root instead.
+    global_skills_real = (global_skills_dir.resolve()
+                          if global_skills_dir.exists()
+                          else None)
     for s in skills_list:
-        skill_path = user_skills_dir / s["name"]
-        s["user_installed"] = skill_path.is_dir() and not skill_path.is_symlink()
+        name = s["name"]
+        category = s.get("category")
+        candidates = [user_skills_dir / name]
+        if category and category != "general":
+            candidates.insert(0, user_skills_dir / category / name)
+        skill_path = next((p for p in candidates if p.exists()), candidates[0])
+        # Direct symlink under skills/ → system (legacy one-per-symlink shape).
+        if skill_path.is_symlink():
+            s["user_installed"] = False
+            continue
+        # Otherwise decide by real location: inside global tree → system,
+        # inside the user's private skills root → user-installed.
+        if global_skills_real is not None and skill_path.exists():
+            try:
+                real = skill_path.resolve()
+                s["user_installed"] = global_skills_real not in real.parents
+            except OSError:
+                s["user_installed"] = False
+        else:
+            s["user_installed"] = False
 
     return skills_list
 
@@ -1899,11 +2006,39 @@ async def proxy_skill_delete(skill_name: str, request: Request):
     """Delete a user-installed skill."""
     proc = await _proc_for_request(request)
     user_home = Path(broker.work_root) / proc.user_id / "hermes_home"
-    skill_path = user_home / "skills" / skill_name
+    skills_dir = user_home / "skills"
 
-    if not skill_path.exists():
+    # A skill may live directly under skills/ (skills/<name>) or inside a
+    # category subdir (skills/<category>/<name>). Resolve the real location.
+    # Optional ?category= query narrows the search when the caller knows it.
+    category = request.query_params.get("category", "").strip()
+    candidates = [skills_dir / skill_name]
+    if category and category != "general":
+        candidates.insert(0, skills_dir / category / skill_name)
+    # Fall back to scanning top-level dirs (category symlinks are skipped —
+    # those resolve into the global tree and must not be deletable).
+    skill_path = next((p for p in candidates if p.exists()), None)
+    if skill_path is None:
+        global_skills_real = (_HERMES_CONFIG_HOME / "skills").resolve()
+        for entry in skills_dir.iterdir() if skills_dir.is_dir() else []:
+            cand = entry / skill_name
+            if cand.exists():
+                skill_path = cand
+                break
+
+    if skill_path is None or not skill_path.exists():
         raise HTTPException(status_code=404, detail="Skill not found")
+
+    # Guard against deleting system skills: a skill reached via a symlink
+    # (direct or through a category-directory symlink) lives in the global
+    # tree and must not be removed here.
+    global_skills_real = (_HERMES_CONFIG_HOME / "skills").resolve()
     if skill_path.is_symlink():
+        raise HTTPException(status_code=400, detail="Cannot delete system skill")
+    try:
+        if global_skills_real in skill_path.resolve().parents:
+            raise HTTPException(status_code=400, detail="Cannot delete system skill")
+    except OSError:
         raise HTTPException(status_code=400, detail="Cannot delete system skill")
 
     shutil.rmtree(str(skill_path))
