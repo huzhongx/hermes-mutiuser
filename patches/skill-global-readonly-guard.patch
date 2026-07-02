@@ -1,0 +1,190 @@
+diff --git a/agent/file_safety.py b/agent/file_safety.py
+index 7a70f9641..a1ae9ba65 100644
+--- a/agent/file_safety.py
++++ b/agent/file_safety.py
+@@ -88,10 +88,23 @@ def get_safe_write_root() -> Optional[str]:
+         return None
+ 
+ 
++def _is_global_skill_writable_check() -> bool:
++    """True when the operator has opted this process into writing global skills.
++
++    Mirrors the ``HERMES_SKILLS_WRITABLE_GLOBAL`` escape hatch used by
++    ``skill_manager_tool._managed_skill_write_guard``. When set, file/patch/
++    execute_code writes into the global skills root are allowed (platform
++    operator curating the shared tree); otherwise they are denied.
++    """
++    val = os.getenv("HERMES_SKILLS_WRITABLE_GLOBAL", "")
++    return val.lower() in ("1", "true", "yes", "on")
++
++
+ def is_write_denied(path: str) -> bool:
+     """Return True if path is blocked by the write denylist or safe root."""
+     home = os.path.realpath(os.path.expanduser("~"))
+-    resolved = os.path.realpath(os.path.expanduser(str(path)))
++    raw = os.path.expanduser(str(path))
++    resolved = os.path.realpath(raw)
+ 
+     if resolved in build_write_denied_paths(home):
+         return True
+@@ -124,9 +137,43 @@ def is_write_denied(path: str) -> bool:
+         except Exception:
+             pass
+ 
++    # Global skills are read-only for tenants. The broker exposes system skills
++    # as a symlink under the tenant's HERMES_HOME/skills/. A write that is
++    # *presented* inside the skills namespace but whose realpath escapes it is
++    # a write to the shared global tree (via the symlink). Refuse it — the
++    # matching skill_manage gate only covers that one tool. The escape hatch
++    # HERMES_SKILLS_WRITABLE_GLOBAL opts a process out (platform operator).
++    if not _is_global_skill_writable_check():
++        try:
++            private_skills_root = (_hermes_home_path() / "skills").resolve()
++            # Presented path (raw, before symlink resolution) under skills ns?
++            # Use abspath (no symlink follow) so a symlinked skill still counts
++            # as "presented under skills/". realpath(raw) would follow the link
++            # and falsely report it as outside.
++            try:
++                Path(os.path.abspath(raw)).relative_to(private_skills_root)
++                presented_in_skills_ns = True
++            except ValueError:
++                presented_in_skills_ns = False
++            # Real location outside the private skills root => symlink escape.
++            try:
++                Path(resolved).relative_to(private_skills_root)
++                resolved_inside = True
++            except ValueError:
++                resolved_inside = False
++            if presented_in_skills_ns and not resolved_inside:
++                return True
++        except Exception:
++            pass
++
+     safe_root = get_safe_write_root()
+     if safe_root and not (resolved == safe_root or resolved.startswith(safe_root + os.sep)):
+-        return True
++        # The global-skills-writable escape hatch (HERMES_SKILLS_WRITABLE_GLOBAL)
++        # lets a platform-operator process write the shared skills tree, whose
++        # real path lives outside the tenant's safe_root. Honor it here so the
++        # hatch fully opens the path.
++        if not _is_global_skill_writable_check():
++            return True
+ 
+     return False
+ 
+diff --git a/tools/skill_manager_tool.py b/tools/skill_manager_tool.py
+index e3f48b2b6..4b48a54c2 100644
+--- a/tools/skill_manager_tool.py
++++ b/tools/skill_manager_tool.py
+@@ -624,6 +624,54 @@ def _create_skill(name: str, content: str, category: str = None) -> Dict[str, An
+     return result
+ 
+ 
++def _managed_skill_write_guard(skill_dir: Path) -> Optional[str]:
++    """Refuse mutating a skill that is reached only via a symlink to a
++    read-only global/shared skills root.
++
++    The multi-tenant broker exposes system skills to each user as a *symlink*
++    inside that user's private ``HERMES_HOME/skills/`` directory. Without this
++    guard, an agent ``skill_manage`` call (edit/patch/write_file/remove_file)
++    — or the matching dashboard HTTP endpoint — resolves through the symlink
++    and writes the *global* skill body, so any logged-in user can rewrite a
++    skill seen by every other tenant. This is the write-path counterpart of
++    the delete-path ``_validate_delete_target`` symlink defense.
++
++    Rule: a skill is globally managed (read-only) when its resolved real path
++    is NOT contained within this process's own private skills root
++    (``SKILLS_DIR``). That holds exactly when the discovered directory is a
++    symlink (or sits behind one) pointing outside ``HERMES_HOME/skills``.
++
++    Operators can opt a process out (e.g. the platform admin that curates the
++    global skills tree) by exporting ``HERMES_SKILLS_WRITABLE_GLOBAL=1``.
++
++    Returns a refusal message string, or ``None`` when the write is safe.
++    """
++    if is_truthy_value(os.environ.get("HERMES_SKILLS_WRITABLE_GLOBAL", "")):
++        return None
++
++    try:
++        private_root = SKILLS_DIR.resolve(strict=False)
++        resolved = Path(skill_dir).resolve(strict=False)
++    except OSError:
++        return None
++
++    # A skill whose real location escapes the private skills root was reached
++    # via a symlink/redirect from elsewhere (the global tree). Treat as
++    # read-only. We compare on resolved (symlink-followed) paths so even an
++    # ancestor symlink cannot smuggle a write through.
++    try:
++        resolved.relative_to(private_root)
++    except ValueError:
++        return (
++            f"Refusing to modify '{skill_dir}': it is a shared/global skill "
++            f"exposed read-only via symlink (real path {resolved} is outside "
++            f"this workspace's skills root {private_root}). Global skills can "
++            f"only be changed by a platform operator. To customize, copy the "
++            f"skill into your own workspace first."
++        )
++    return None
++
++
+ def _edit_skill(name: str, content: str) -> Dict[str, Any]:
+     """Replace the SKILL.md of any existing skill (full rewrite)."""
+     err = _validate_frontmatter(content)
+@@ -638,6 +686,10 @@ def _edit_skill(name: str, content: str) -> Dict[str, Any]:
+     if not existing:
+         return {"success": False, "error": _skill_not_found_error(name)}
+ 
++    guard_err = _managed_skill_write_guard(existing["path"])
++    if guard_err:
++        return {"success": False, "error": guard_err}
++
+     skill_md = existing["path"] / "SKILL.md"
+     # Back up original content for rollback
+     original_content = skill_md.read_text(encoding="utf-8") if skill_md.exists() else None
+@@ -691,6 +743,10 @@ def _patch_skill(
+ 
+     skill_dir = existing["path"]
+ 
++    guard_err = _managed_skill_write_guard(skill_dir)
++    if guard_err:
++        return {"success": False, "error": guard_err}
++
+     if file_path:
+         # Patching a supporting file
+         err = _validate_file_path(file_path)
+@@ -809,6 +865,12 @@ def _delete_skill(name: str, absorbed_into: Optional[str] = None) -> Dict[str, A
+     skill_dir = existing["path"]
+     skills_root = _containing_skills_root(skill_dir)
+ 
++    # Refuse deleting a shared/global skill reached via symlink (multi-tenant
++    # isolation). Aligns delete with the edit/patch/write_file/remove_file guard.
++    guard_err = _managed_skill_write_guard(skill_dir)
++    if guard_err:
++        return {"success": False, "error": guard_err}
++
+     # Defense-in-depth before the recursive delete (port of Kilo Code #11240).
+     unsafe = _validate_delete_target(skill_dir)
+     if unsafe:
+@@ -859,6 +921,10 @@ def _write_file(name: str, file_path: str, file_content: str) -> Dict[str, Any]:
+     if not existing:
+         return {"success": False, "error": _skill_not_found_error(name, " Create it first with action='create'.")}
+ 
++    guard_err = _managed_skill_write_guard(existing["path"])
++    if guard_err:
++        return {"success": False, "error": guard_err}
++
+     target, err = _resolve_skill_target(existing["path"], file_path)
+     if err:
+         return {"success": False, "error": err}
+@@ -895,6 +961,10 @@ def _remove_file(name: str, file_path: str) -> Dict[str, Any]:
+ 
+     skill_dir = existing["path"]
+ 
++    guard_err = _managed_skill_write_guard(skill_dir)
++    if guard_err:
++        return {"success": False, "error": guard_err}
++
+     target, err = _resolve_skill_target(skill_dir, file_path)
+     if err:
+         return {"success": False, "error": err}
