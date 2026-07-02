@@ -66,20 +66,46 @@ vi /root/.hermes/skills_space_blacklist.json
 从配置删掉该技能名。注意:解除后已存在用户需要 sync 才会**补建**软链(`proxy_skills_list`
 对"不存在才建"的处理已经覆盖);新用户 spawn 时自动软链。
 
+## 当前生产配置(2026-07-02 固化)
+
+从所有用户的 `.skipped` 共识推导并固化角色→技能映射(命名反直觉但以实际行为为准:
+**talent 空间 = 求职者,hiring 空间 = 招聘方**,互相屏蔽对方角色的工具):
+
+```json
+{
+  "talent": ["ai-exam","hina-telemule-skill","jd-promotion-assistant",
+             "jd-recruiter-assistant","job-posting-assistant",
+             "resume-template-filler","resume-template-filler-lessons",
+             "talent-360-analysis","talent-risk-assessment","video-interview"],
+  "hiring": ["campus-resume-targeted-diagnosis","mock-interview",
+             "position-recommender","resume-intake","resume_optimizer"]
+}
+```
+
+- **talent(求职者)可见 5**:campus-resume-targeted-diagnosis、mock-interview、position-recommender、resume-intake、resume_optimizer
+- **hiring(招聘方)可见 10**:ai-exam、hina-telemule-skill、jd-*、resume-template-filler*、talent-360-analysis、talent-risk-assessment、video-interview 等
+- **expert**:无屏蔽(10 用户,全部软链)
+- productivity/research/software-development 等**类别目录**(通用工具)不分角色,所有空间都软链
+
+固化后,空间黑名单与用户级 `.skipped` **双重覆盖**。`.skipped` 漏标时(实测发现 1 个 hiring
+用户漏了 3 个标记、还残留软链),空间黑名单 sync 反向移除兜底清掉了 —— 正是这套机制的价值。
+
 ## 验证(2026-07-02 已测)
 
 - `_is_space_blacklisted`:hiring/mock-interview → True;talent/mock-interview → False;
   hiring/其他技能 → False;expert/mock-interview → False;普通用户 → False(全部正确)
-- **全新 hiring 用户**模拟 spawn:软链 23 个技能,mock-interview 被屏蔽 ✅
-- **全新 talent 用户**模拟 spawn:软链 24 个技能,含 mock-interview ✅
-- **sync 反向移除**:给 hiring 用户临时塞 mock-interview 软链,触发 sync 后被移除 ✅
+- **全新 hiring 用户**模拟 spawn:软链技能,mock-interview 等被屏蔽 ✅
+- **全新 talent 用户**模拟 spawn:含 mock-interview 等 ✅
+- **sync 反向移除**:黑名单命中 + 残留软链 → 自动清 + reload ✅
 - 配置 mtime 热加载正常 ✅
+- 角色映射与 SKILL.md description 自洽(talent 屏蔽 HR 工具,hiring 屏蔽求职工具)✅
 
 ## 覆盖范围
 
-- ✅ 现有用户(手动 `.skipped` 已建 + sync 反向移除兜底)
+- ✅ 现有用户(手动 `.skipped` + 空间黑名单 sync 反向移除双重兜底)
 - ✅ 未来新用户(spawn 时空间黑名单判断)
 - ✅ 配置热加载(改文件无需重启 broker)
 
 空间类型从 user_id 解析,仅 `waw:...:workspace:<type>` 格式生效;普通/测试用户无空间类型,
 不受此机制约束(全部软链)。
+
