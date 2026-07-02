@@ -147,11 +147,34 @@ if presented_in_skills_ns and not resolved_inside:
 broker spawn 的每个 dashboard 进程 import 这两个模块,故 **重启 broker 后**所有新会话即受双重保护。
 重启流程见 memory `reference_broker_restart.md`(需 `env -i` 防 Claude Code 环境污染)。
 
-## 残留边界(诚实记录)
+## 残留边界(诚实记录,实测坐实)
 
-这两道闸覆盖了 agent 的**结构化写工具**(skill_manage / file / patch)。但 `execute_code`
-沙箱里用户自己写的 Python(`open('/tmp/.../skills/x/SKILL.md','w')`)走的是沙箱进程的系统调用,
-不经过 `is_write_denied`。这条路由 `HERMES_WRITE_SAFE_ROOT` + 沙箱 cwd 约束兜底(技能软链路径在
-safe_root 内,但沙箱若不限制到 hermes_home 之外仍可能触达)。若要把多租户当硬安全边界,
-最终解仍是 bind-mount ro(内核强制),应用层守卫是其下方的纵深防御。
+两道应用层闸覆盖了 agent 的**结构化写工具**(skill_manage / file / patch / dashboard HTTP)。
+但 broker 环境下还有**应用层守卫无法覆盖的路径**:
+
+**实测结论(broker 进程 root + `env_type=local`,沙箱=同权限本地子进程,无 chroot/seccomp):**
+
+| 攻击路径 | 状态 | 原因 |
+|---|---|---|
+| `skill_manage` / `file` / `patch` / dashboard HTTP | ✅ 封死 | 应用层闸 |
+| `execute_code` 沙箱 `open('/root/.hermes/skills/...','w')` | ❌ **未封** | 子进程系统调用,不过 `is_write_denied` |
+| `terminal`(bash)`echo > /root/.hermes/skills/...` | ❌ **未封** | local 后端,命令级 guard 不拦普通写 |
+
+实测脚本(沙箱直接 append 写全局技能 SKILL.md → 成功,而 `is_write_denied` 对同路径返回 True
+却拦不到,因为沙箱 `open()` 不经过它)。**根因**:broker + 所有 dashboard 进程跑在 root(uid=0),
+沙箱是同权限本地子进程,任何能执行系统调用的子进程都能直接写 `/root/.hermes`。
+
+**这决定了应用层守卫的性质**:它们挡住"用户用正常/便利方式改技能"的路径(占绝大多数实际场景),
+但**不是真正的多租户安全边界**。要做成硬隔离(可承诺给租户),只有两条真路:
+
+1. **bind-mount ro + per-user mount namespace**(治本):broker spawn 改成每用户 `unshare -m`
+   独立挂载命名空间,全局技能只读挂入。租户进程内核级写不了,运维进程不受影响。需 CAP_SYS_ADMIN,
+   架构改动较大。
+2. **文件系统不可变(chattr +i /root/.hermes/skills)**(半治本,改动小):root 也写不了,内核强制。
+   运维升级需 `chattr -i` 解锁→改→重新 `+i`。适合"技能不常变"的现状。
+
+**当前决策(2026-07-02):已知风险记录,暂不处理。** 理由:结构化写工具已封死,覆盖绝大多数实际
+场景;execute_code/terminal 直写需用户主动构造路径且具备引导 agent 跑代码的能力,威胁等级取决于
+用户可信度(内部团队 vs 公开租户)。待威胁模型升级时再做内核级隔离。
+
 
