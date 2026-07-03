@@ -1,0 +1,66 @@
+diff --git a/agent/title_generator.py b/agent/title_generator.py
+index 583a2cfc6..cb52028d4 100644
+--- a/agent/title_generator.py
++++ b/agent/title_generator.py
+@@ -88,6 +88,22 @@ def generate_title(
+             main_runtime=main_runtime,
+         )
+         title = (response.choices[0].message.content or "").strip()
++        # Strip <think>...</think> reasoning chains. Some routers (and some
++        # reasoning-capable models) do not separate reasoning into a
++        # ``reasoning_content`` field and instead leak the full chain into
++        # ``content`` — without this the session title would become the
++        # model's deliberation rather than its final answer.
++        #
++        # Two cases (both seen in production titles):
++        # 1. Closed:   "<think>...</think>actual title" → take part after last </think>.
++        # 2. Truncated: "<think>...reasoning" (no </think>, cut off by max_tokens)
++        #    → the whole content is unfinished reasoning with no real title; discard
++        #    it so the caller falls back to a default title rather than showing the
++        #    model's deliberation. (Previously this case leaked through unchanged.)
++        if "</think>" in title:
++            title = title.rsplit("</think>", 1)[-1].strip()
++        elif title.lstrip().startswith("<think>"):
++            title = ""
+         # Clean up: remove quotes, trailing punctuation, prefixes like "Title: "
+         title = title.strip('"\'')
+         if title.lower().startswith("title:"):
+diff --git a/tests/agent/test_title_generator.py b/tests/agent/test_title_generator.py
+index 43b1c1e6b..15c3a5050 100644
+--- a/tests/agent/test_title_generator.py
++++ b/tests/agent/test_title_generator.py
+@@ -77,6 +77,34 @@ class TestGenerateTitle:
+             title = generate_title("my pod keeps crashing", "Let me look...")
+             assert title == "Kubernetes Pod Debugging"
+ 
++    def test_strips_closed_think_block(self):
++        # Closed <think>...</think> followed by the real title.
++        # Some routers/models leak reasoning into content; take the part after </think>.
++        mock_response = MagicMock()
++        mock_response.choices = [MagicMock()]
++        mock_response.choices[0].message.content = (
++            "<think>The user wants a title about resumes.</think>\n简历诊断服务"
++        )
++
++        with patch("agent.title_generator.call_llm", return_value=mock_response):
++            title = generate_title("帮我看看简历", "好的,我来分析...")
++            assert title == "简历诊断服务"
++
++    def test_discards_truncated_think_block(self):
++        # Truncated reasoning: <think> with no closing </think> (cut off by max_tokens).
++        # The whole content is unfinished deliberation with no real title → discard
++        # (return None) so the caller keeps the default title instead of showing reasoning.
++        mock_response = MagicMock()
++        mock_response.choices = [MagicMock()]
++        mock_response.choices[0].message.content = (
++            "<think> The user wants me to generate a short, descriptive title "
++            "(3-7 words) for a conversation about resume diagnosis..."
++        )
++
++        with patch("agent.title_generator.call_llm", return_value=mock_response):
++            title = generate_title("简历诊断", "分析中...")
++            assert title is None
++
+     def test_truncates_long_titles(self):
+         mock_response = MagicMock()
+         mock_response.choices = [MagicMock()]
