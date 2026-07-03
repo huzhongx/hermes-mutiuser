@@ -1,0 +1,58 @@
+diff --git a/tools/skill_manager_tool.py b/tools/skill_manager_tool.py
+index e3f48b2b6..452982d75 100644
+--- a/tools/skill_manager_tool.py
++++ b/tools/skill_manager_tool.py
+@@ -349,6 +349,35 @@ def _resolve_skill_dir(name: str, category: str = None) -> Path:
+     return SKILLS_DIR / name
+ 
+ 
++def _iter_skill_md(skills_dir):
++    """Yield SKILL.md paths under *skills_dir*, following symlinked skill dirs.
++
++    Python < 3.13 ``rglob`` does not descend into symlinked directories, so
++    workspace skills mounted as symlinks (the broker's per-user layout, where
++    every business skill under ``hermes_home/skills/`` is a symlink to
++    ``~/.hermes/skills/``) are invisible to a plain ``rglob``. Walk top-level
++    entries explicitly and ``rglob`` each child, resolving symlinks first —
++    matching the behaviour of ``skills_list``/``skill_view`` which already
++    ``.resolve()`` their paths.
++    """
++    try:
++        entries = list(skills_dir.iterdir())
++    except OSError:
++        return
++    for entry in entries:
++        try:
++            target = entry.resolve() if entry.is_symlink() else entry
++        except (OSError, RuntimeError):
++            target = entry
++        try:
++            if not target.is_dir():
++                continue
++        except OSError:
++            continue
++        for skill_md in target.rglob("SKILL.md"):
++            yield skill_md
++
++
+ def _find_skill(name: str) -> Optional[Dict[str, Any]]:
+     """
+     Find a skill by name across all skill directories.
+@@ -361,7 +390,7 @@ def _find_skill(name: str) -> Optional[Dict[str, Any]]:
+     for skills_dir in get_all_skills_dirs():
+         if not skills_dir.exists():
+             continue
+-        for skill_md in skills_dir.rglob("SKILL.md"):
++        for skill_md in _iter_skill_md(skills_dir):
+             if is_excluded_skill_path(skill_md):
+                 continue
+             if skill_md.parent.name == name:
+@@ -424,7 +453,7 @@ def _find_skill_in_other_profiles(name: str) -> List[Tuple[str, Path]]:
+         if not skills_dir.is_dir():
+             continue
+         try:
+-            for skill_md in skills_dir.rglob("SKILL.md"):
++            for skill_md in _iter_skill_md(skills_dir):
+                 if is_excluded_skill_path(skill_md):
+                     continue
+                 if skill_md.parent.name == name:
