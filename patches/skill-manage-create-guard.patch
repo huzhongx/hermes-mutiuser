@@ -1,0 +1,49 @@
+# skill-manage-create-guard.patch
+#
+# Closes the skill_manage action=create hole that let agents write into the
+# shared global skills tree via a symlinked category dir (e.g. `productivity`).
+#
+# Root cause
+# ----------
+# `_create_skill()` called `_resolve_skill_dir(name, category)` then immediately
+# `skill_dir.mkdir(...)`. When a tenant passes `category="productivity"`, the
+# resolved dir is `<HERMES_HOME>/skills/productivity/<name>`. But
+# `skills/productivity` is a symlink the broker exposes to `/root/.hermes/skills/productivity`
+# (the shared global tree), so `mkdir` follows the link and writes the new skill
+# into the GLOBAL root — visible to and polluting every other tenant.
+#
+# The sibling write actions (edit/patch/delete/write_file/remove_file) are all
+# gated by `_managed_skill_write_guard`, but `create` was never wired to it.
+# Verified live: agent-authored skills accumulated under
+# `/root/.hermes/skills/productivity/` (resume-*-troubleshooting, mock-interview-*-local,
+# waw-*-debug, jwt-token-debugging, …) grew daily even after the file_safety /
+# skill_manage readonly guards landed, precisely because create bypassed them.
+#
+# Fix
+# ---
+# Run `_managed_skill_write_guard(skill_dir)` right after `_resolve_skill_dir()`
+# and before `mkdir()`. The guard's existing rule (resolved real path must stay
+# inside the process's private skills root) already detects the symlink escape
+# and refuses it — no new logic needed. Operators still escape via
+# `HERMES_SKILLS_WRITABLE_GLOBAL=1` to curate the global tree.
+#
+# Verified:
+#   - create category="productivity"  → REFUSED ("shared/global skill ... read-only")
+#   - create at private root (no cat) → ALLOWED  (normal user-authored skills unaffected)
+#
+--- a/tools/skill_manager_tool.py
++++ b/tools/skill_manager_tool.py
+@@ -615,6 +615,15 @@ def _create_skill(name: str, content: str, category: str = None) -> Dict[str, An
+         }
+
+     # Create the skill directory
+     skill_dir = _resolve_skill_dir(name, category)
++    # Block create-into-global-via-symlink: a tenant reaches the shared global
++    # skills tree (e.g. the symlinked ``productivity`` category) and would
++    # otherwise ``mkdir`` through the symlink into the global root, polluting
++    # every other tenant. Same rule as edit/patch/delete — the resolved real
++    # path must stay inside this workspace's private skills root.
++    guard_err = _managed_skill_write_guard(skill_dir)
++    if guard_err:
++        return {"success": False, "error": guard_err}
+     skill_dir.mkdir(parents=True, exist_ok=True)
