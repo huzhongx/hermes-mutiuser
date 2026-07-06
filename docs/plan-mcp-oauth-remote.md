@@ -1,5 +1,10 @@
 # MCP OAuth Authorization for Remote Users
 
+> ⚠️ **SUPERSEDED (2026-07-06)** by the state-routing implementation in
+> `mcp-oauth-state-routing.md` (the original plan here was the basis for it).
+> This file is the original design rationale; see the state-routing doc for the
+> as-built version.
+
 ## Context
 
 Hermes Platform 多用户架构下，MCP OAuth 授权流程只在服务端 localhost 生效。远程用户通过浏览器访问时无法完成 OAuth 授权。需要让远程用户能在前端面板点击 Connect，通过公网回调完成 OAuth。

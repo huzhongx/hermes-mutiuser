@@ -1,5 +1,13 @@
 # MCP OAuth 远程授权接口文档
 
+> ⚠️ **SUPERSEDED (2026-07-06).** This is the *port-based* design
+> (`mcp-oauth-cb/{port}/callback`, shared `redirect_port`). It has a multi-user
+> port-collision problem (all users share one registered port → only one can
+> bind). The **state-routing** design in `mcp-oauth-state-routing.md` replaces
+> it and is what's actually implemented. Kept for historical context only — the
+> flow diagrams below (scenario A Connect button, scenario B 401 reauth) still
+> describe the intended UX, which the new endpoints implement.
+
 ## 概述
 
 为 Hermes Platform 多用户架构新增 MCP OAuth 远程授权支持。远程用户通过 nginx 反向代理完成 OAuth 授权，无需直接访问 Hermes 进程的 localhost。

@@ -1,239 +1,144 @@
 # MCP OAuth Callback: State-Based Routing (Multi-User)
 
+> **Status: IMPLEMENTED (2026-07-06).** The plan below is the version that was
+> actually built. It supersedes the earlier port-based `api-mcp-oauth.md`
+> design (which has a multi-user port-collision problem — kept for history).
+>
+> Patches (against current live code, not the pre-consolidation version):
+> - `patches/mcp-oauth-state-routing.patch` — `tools/mcp_oauth.py`
+> - `patches/mcp-oauth-broker-callback.patch` — `hermes_broker.py`
+> - `patches/mcp-oauth-dashboard-start-status.patch` — `hermes_cli/web_server.py`
+> - nginx: `/etc/nginx/sites-available/openclaw.conf` (manual edit)
+>
+> **Activation still pending:** the running broker (pid 4051843 at time of
+> writing) and the live hermes-agent install must be restarted to load the new
+> endpoint + code. See "Activation" below.
+
 ## Context
 
-Hermes Platform runs multiple Hermes agent processes (one per user/workspace) on ports 9119-9200. Each process can independently initiate MCP OAuth flows (e.g., GitHub Copilot MCP, Notion MCP).
+Hermes Platform runs multiple Hermes agent processes (one per user/workspace) on
+ports 9119-9200. Each process can independently initiate MCP OAuth flows (e.g.
+GitHub Copilot MCP, Notion MCP).
 
-**Problem**: All user configs specify `redirect_port: 47892`. The OAuth callback URL is `https://domain/hermes/mcp-oauth-cb/{port}/callback`, and nginx routes directly to `127.0.0.1:{port}`. But a TCP port can only be bound by ONE process. When user A's process binds 47892, user B's process gets `OSError: [Errno 98] Address already in use` and GitHub MCP fails to connect (3 retries, then gives up).
+**Problem (root cause of the old failures):** The upstream hermes-agent OAuth
+client builds a `redirect_uri` of `http://127.0.0.1:{port}/callback` — the
+*user's own machine*. For remote/multi-user users the browser redirect never
+reaches the server process, so the flow never completes. Evidence: 0
+`github.json` token files on disk despite 9 `github.client.json` (the DCR step
+succeeded but the code-for-token exchange never happened). Compounding this,
+users sharing a registered `redirect_port` collide (`Address already in use`).
 
-**Root cause**: The callback URL embeds the port number, so the port must be globally unique AND known at OAuth App registration time (GitHub only accepts exact-match redirect URIs). Dynamic ports can't be pre-registered.
+**Solution:** When `HERMES_NGINX_DOMAIN` is set, use a **fixed public callback
+URL** with **state-based routing**. The OAuth provider redirects to the public
+path once; the broker resolves the `state` parameter back to the originating
+process's local port and forwards there. Each process still binds its own
+random local port, but the port is never exposed publicly, so concurrent users
+never collide.
 
-**Solution**: Use a **fixed callback URL** (no port) + **state-based routing**. GitHub OAuth App registers one callback URL. When the callback arrives, the broker looks up the `state` parameter to find the correct Hermes process port and forwards the request.
+## What changed (live code)
 
-## Key Design Decisions
+### 1. `tools/mcp_oauth.py`
 
-- **Fixed callback URL**: `https://domain/hermes/mcp-oauth/callback` (no port in path)
-- **State routing file**: Hermes process writes `{state} → {port}` mapping to `/tmp/hermes_oauth_routes/` when OAuth flow starts
-- **Broker reads state**: Broker's new `/mcp-oauth/callback` endpoint reads the `state` query param, looks up the port, proxies to `127.0.0.1:{port}/callback`
-- **Each process still binds a unique random port** for its local callback server (unchanged), but the port is never exposed in the public URL
+- **`_redirect_uri(port)`** (new helper): returns
+  `https://{HERMES_NGINX_DOMAIN}/hermes/mcp-oauth/callback` when the domain is
+  set, else the upstream `http://127.0.0.1:{port}/callback` fallback.
+  `_build_client_metadata()` and `_maybe_preregister_client()` both use it now
+  (the two hard-coded `127.0.0.1` redirect_uris are gone).
+- **State route file** (`_write_state_route` / `_cleanup_state_route`): writes
+  `{state} -> {port}` to `/tmp/hermes_oauth_routes/{state}` atomically; cleaned
+  on completion/failure/skip.
+- **Pending-flow registry** (`register_pending_oauth_flow`,
+  `get_pending_oauth_authorization_url`, `mark_oauth_flow_completed`,
+  `mark_oauth_flow_failed`): the redirect handler stashes the authorization URL
+  + state here. Used both for route cleanup and by the dashboard's
+  `/oauth/start` + the scenario-B reauth path in `mcp_tool.py`.
+- **`_redirect_handler`**: parses `state` from the SDK's authorization URL,
+  writes the route file, registers the pending flow.
+- **`_wait_for_callback`**: calls `mark_oauth_flow_completed/_failed` on the
+  way out so route files never leak.
+- **`build_oauth_auth`**: records `_oauth_server_name` for the registry.
+- The SSH paste-fallback guidance is suppressed when a public route is in use
+  (the browser reaches the broker normally there).
 
-## Implementation Plan
+### 2. `hermes_broker.py`
 
-### Step 1: nginx — fixed callback route to broker
+- New `GET /mcp-oauth/callback`: reads `state` → resolves port from
+  `/tmp/hermes_oauth_routes/{state}` → forwards to
+  `127.0.0.1:{port}/callback?code=&state=` via the reused `_get_proxy_http()`
+  aiohttp session. Returns clear HTML errors for missing state / unknown
+  session / dead process.
 
-**File**: `/etc/nginx/sites-enabled/openclaw.conf` (line ~167)
+### 3. `hermes_cli/web_server.py` (dashboard API)
 
-Replace the existing port-based regex location with a fixed path that goes to the broker:
+Frontend (`chat.html`) already calls these; they were missing before:
+- `POST /api/mcp/servers/{name}/oauth/start` — clears stale tokens, runs a
+  background probe (drives the OAuth flow), waits ≤30s for the authorization
+  URL, returns `{status, authorization_url}`.
+- `GET /api/mcp/servers/{name}/oauth/status` — polls; `completed` when the
+  token file appears on disk.
+
+### 4. nginx (`/etc/nginx/sites-available/openclaw.conf`)
+
+Added a fixed route to the broker (the old port-based `mcp-oauth-cb/{port}`
+block is kept for backward compat):
 
 ```nginx
-# MCP OAuth callback — routed by broker via state parameter
 location = /hermes/mcp-oauth/callback {
     proxy_pass http://hermes_broker/mcp-oauth/callback;
     proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-Proto $scheme;
-    # Preserve query params (code=, state=)
     proxy_set_header X-Original-URI $request_uri;
     proxy_read_timeout 30s;
 }
 ```
 
-Keep the old `~ ^/hermes/mcp-oauth-cb/([0-9]+)/callback` block temporarily for backward compat during transition, but it will be removed after verification.
+Backup: `/root/openclaw.conf.bak.mcp-oauth-state-20260706`.
 
-### Step 2: mcp_oauth.py — fixed redirect_uri + state route file
+## Manual step: update the OAuth App redirect URL
 
-**File**: `/root/.hermes/hermes-agent/tools/mcp_oauth.py`
+For each OAuth provider whose MCP server uses `auth: oauth`, set the registered
+callback URL to the fixed public path (no port):
 
-#### 2a. New: state route file writer
+- **GitHub Copilot MCP** (OAuth App `Ov23lifmBsnY847Canol`):
+  `https://huzhongxiang.cloud/hermes/mcp-oauth/callback`
 
-After line ~105 (`_pending_oauth_flows_lock`):
+Remove any old port-based callback URLs from the provider's settings. This must
+be done in the provider's own console; it is not code.
 
-```python
-_OAUTH_ROUTE_DIR = "/tmp/hermes_oauth_routes"
+## Activation (PENDING — requires restart)
 
-def _write_state_route(state: str, port: int) -> None:
-    """Write state→port mapping so the broker can route callbacks."""
-    import os
-    try:
-        os.makedirs(_OAUTH_ROUTE_DIR, exist_ok=True)
-        path = os.path.join(_OAUTH_ROUTE_DIR, state)
-        # Atomic write via temp file
-        tmp = path + ".tmp"
-        with open(tmp, "w") as f:
-            f.write(str(port))
-        os.rename(tmp, path)
-    except Exception:
-        pass  # non-fatal — local mode won't need routing
+The code + nginx are in place and unit-verified, but the **running broker and
+hermes-agent install must be restarted** for the new endpoint and code to load
+(the live E2E callback test returns the broker's `404 {"detail":"Not Found"}`
+until then). Restart per `memory/reference_broker_restart.md` (drain → SIGKILL
+broker → relaunch with `env -i` + `source .env`). Each per-user process picks up
+the new hermes-agent code on respawn.
 
-def _cleanup_state_route(state: str) -> None:
-    """Remove the state route file after flow completes."""
-    import os
-    try:
-        os.unlink(os.path.join(_OAUTH_ROUTE_DIR, state))
-    except FileNotFoundError:
-        pass
-```
+After restart, verify:
+1. `curl https://huzhongxiang.cloud/hermes/mcp-oauth/callback?code=x&state=bogus`
+   returns the broker's HTML "OAuth session not found" (not `{"detail":"Not Found"}`).
+2. A real GitHub MCP Connect from the dashboard produces a `github.json` token
+   file under the user's `mcp-tokens/`.
 
-#### 2b. Modify `_build_client_metadata()` (line ~964)
+## Verification done so far (no restart)
 
-Change redirect_uri to fixed path (no port):
+- `mcp_oauth.py`: full module imports clean; `_redirect_uri` returns the public
+  URL under `HERMES_NGINX_DOMAIN=huzhongxiang.cloud` and the localhost fallback
+  without it; state route write/read/cleanup works; pending-flow registry
+  registers + clears correctly.
+- `hermes_broker.py` + `web_server.py`: syntax OK; all referenced symbols
+  resolve (`_get_proxy_http`, `aiohttp`, `HermesTokenStorage`, etc.).
+- nginx: `nginx -t` passes; `nginx -s reload` done; the public route reaches
+  the broker (confirmed by the broker-shaped 404 response).
 
-```python
-def _build_client_metadata(cfg: dict) -> "OAuthClientMetadata":
-    port = cfg.get("_resolved_port")
-    if port is None:
-        raise ValueError("_configure_callback_port() must be called first")
-    client_name = cfg.get("client_name", "Hermes Agent")
-    scope = cfg.get("scope")
-    nginx_domain = os.environ.get("HERMES_NGINX_DOMAIN", "")
-    if nginx_domain:
-        # Fixed callback path — broker routes via state parameter
-        redirect_uri = f"https://{nginx_domain}/hermes/mcp-oauth/callback"
-    else:
-        redirect_uri = f"http://127.0.0.1:{port}/callback"
-    # ... rest unchanged
-```
-
-#### 2c. Modify `_redirect_handler()` (line ~527) and `make_redirect_handler()` (line ~597)
-
-Parse `state` from authorization_url and write the route file:
-
-```python
-async def _redirect_handler(authorization_url: str) -> None:
-    # Parse state from the authorization URL
-    from urllib.parse import urlparse, parse_qs
-    parsed = urlparse(authorization_url)
-    state = parse_qs(parsed.query).get("state", [None])[0]
-    
-    if _oauth_port is not None and state:
-        _write_state_route(state, _oauth_port)
-    
-    if _oauth_port is not None:
-        flow_id = f"flow-{_oauth_port}"
-        with _pending_oauth_flows_lock:
-            _pending_oauth_flows[flow_id] = {
-                "authorization_url": authorization_url,
-                "callback_port": _oauth_port,
-                "status": "awaiting_callback",
-                "server_name": _oauth_server_name,
-                "state": state,
-                "created_at": time.time(),
-            }
-    _print_oauth_url(authorization_url, _oauth_port)
-```
-
-Same change in `make_redirect_handler(port, server_name)`.
-
-#### 2d. Cleanup in `mark_oauth_flow_completed()` / `mark_oauth_flow_failed()`
-
-When flow completes or fails, delete the state route file:
-
-```python
-def mark_oauth_flow_completed(callback_port: int) -> None:
-    flow_id = f"flow-{callback_port}"
-    with _pending_oauth_flows_lock:
-        flow = _pending_oauth_flows.get(flow_id)
-        if flow:
-            state = flow.get("state")
-            if state:
-                _cleanup_state_route(state)
-            flow["status"] = "completed"
-```
-
-### Step 3: Broker — new callback routing endpoint
-
-**File**: `/opt/hermes-platform/hermes_broker.py` (before the catch-all at line ~1799)
-
-```python
-@app.api_route("/mcp-oauth/callback", methods=["GET"])
-async def mcp_oauth_callback(request: Request):
-    """Route OAuth callback to the correct Hermes process via state param."""
-    params = dict(request.query_params)
-    state = params.get("state")
-    code = params.get("code")
-    error = params.get("error")
-    
-    if not state:
-        return HTMLResponse(
-            "<html><body><h2>OAuth Error</h2><p>Missing state parameter.</p></body></html>",
-            status_code=400,
-        )
-    
-    # Look up port from state route file
-    import os
-    route_file = f"/tmp/hermes_oauth_routes/{state}"
-    port = None
-    try:
-        with open(route_file) as f:
-            port = int(f.read().strip())
-    except (FileNotFoundError, ValueError):
-        pass
-    
-    if port is None:
-        # Fallback: scan all procs for matching state in _pending_oauth_flows
-        # (would require IPC — skip for now, return error)
-        return HTMLResponse(
-            "<html><body><h2>OAuth Error</h2>"
-            "<p>Could not find the OAuth session. "
-            "It may have expired. Please try authorizing again.</p></body></html>",
-            status_code=404,
-        )
-    
-    # Forward to the Hermes process's callback handler
-    qs = f"?code={code}&state={state}" if code else f"?error={error}&state={state}"
-    url = f"http://127.0.0.1:{port}/callback{qs}"
-    try:
-        import httpx
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(url, timeout=10)
-            return HTMLResponse(content=resp.text, status_code=resp.status_code)
-    except Exception as e:
-        logger.warning(f"OAuth callback forward to port {port} failed: {e}")
-        return HTMLResponse(
-            "<html><body><h2>OAuth Error</h2>"
-            "<p>The agent process is not responding. Please try again.</p></body></html>",
-            status_code=502,
-        )
-```
-
-### Step 4: Update GitHub OAuth App
-
-**Manual step**: In GitHub OAuth App settings (`Ov23lifmBsnY847Canol`), update the Authorization callback URL to:
-
-```
-https://huzhongxiang.cloud/hermes/mcp-oauth/callback
-```
-
-Remove any port-based callback URLs.
-
-### Step 5: Config cleanup
-
-**All user config.yaml files**: Remove `redirect_port: 47892` from the github oauth block (or leave it — it's now ignored since redirect_uri no longer uses the port). The `client_id` and `client_secret` stay.
-
-### Step 6: Generate patch + restart
-
-1. Generate patch: `cd /root/.hermes/hermes-agent && git diff > /opt/hermes-platform/patches/mcp-oauth-state-routing.patch`
-2. Commit patch to hermes-platform repo
-3. nginx reload
-4. Kill all Hermes processes so they restart with new code
-
-## Verification
-
-1. **Single user**: User A opens GitHub MCP → click Connect → browser opens GitHub authorize → approve → callback arrives at `/hermes/mcp-oauth/callback?code=xxx&state=yyy` → broker reads state file → forwards to port → token saved → status shows "completed"
-
-2. **Concurrent users**: User A and User B both initiate GitHub OAuth simultaneously → both have unique random ports → both state files written → both callbacks routed correctly → both succeed
-
-3. **Check state route files**: `ls /tmp/hermes_oauth_routes/` should show files during active flows, cleaned up after completion
-
-4. **Agent log**: No `Address already in use` errors for port 47892
-
-## Files Modified
+## Files
 
 | File | Change |
 |------|--------|
-| `/etc/nginx/sites-enabled/openclaw.conf` | New fixed callback route to broker |
-| `/root/.hermes/hermes-agent/tools/mcp_oauth.py` | Fixed redirect_uri, state route file write/cleanup |
-| `/opt/hermes-platform/hermes_broker.py` | New `/mcp-oauth/callback` endpoint with state-based forwarding |
-| GitHub OAuth App settings | Update callback URL (manual) |
-| `/opt/hermes-platform/patches/mcp-oauth-state-routing.patch` | New patch |
+| `/root/.hermes/hermes-agent/tools/mcp_oauth.py` | public redirect_uri, state route, pending-flow registry |
+| `/root/.hermes/hermes-agent/hermes_cli/web_server.py` | `/oauth/start` + `/oauth/status` endpoints |
+| `/opt/hermes-platform/hermes_broker.py` | `GET /mcp-oauth/callback` state router |
+| `/etc/nginx/sites-available/openclaw.conf` | fixed callback route → broker |
+| Provider OAuth App settings | set callback to the fixed public path (manual) |

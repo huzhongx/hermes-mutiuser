@@ -1,5 +1,10 @@
 # MCP Server OAuth 授权机制
 
+> **Note (2026-07-06):** Describes the upstream hermes-agent OAuth 2.1 PKCE
+> mechanism. For the Hermes-Platform multi-user *callback routing* layer built
+> on top of it (public redirect_uri + broker state routing), see
+> `mcp-oauth-state-routing.md`.
+
 ## 概述
 
 Hermes 支持 **OAuth 2.1 PKCE** 协议的 MCP server 授权。整个流程由三个模块协作：

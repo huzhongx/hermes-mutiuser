@@ -1,0 +1,243 @@
+diff --git a/tools/mcp_oauth.py b/tools/mcp_oauth.py
+index 3f85f4859..05f706104 100644
+--- a/tools/mcp_oauth.py
++++ b/tools/mcp_oauth.py
+@@ -93,6 +93,10 @@ class OAuthNonInteractiveError(RuntimeError):
+ # tests can verify the callback server and the redirect_uri share a port.
+ _oauth_port: int | None = None
+ 
++# Server name of the in-flight flow, captured by build_oauth_auth so the
++# redirect handler can register it in the pending-flow registry.
++_oauth_server_name: str = ""
++
+ 
+ # Skip tokens accepted at the paste prompt — exit OAuth without auth.
+ _SKIP_TOKENS = frozenset({"skip", "cancel", "s", "n", "no", "q", "quit"})
+@@ -104,6 +108,115 @@ _SKIP_TOKENS = frozenset({"skip", "cancel", "s", "n", "no", "q", "quit"})
+ _USER_SKIPPED_SENTINEL = "__hermes_user_skipped__"
+ 
+ 
++# ---------------------------------------------------------------------------
++# Multi-user callback routing (Hermes Platform)
++# ---------------------------------------------------------------------------
++# When running behind nginx (HERMES_NGINX_DOMAIN set) the OAuth redirect_uri
++# is the PUBLIC path ``https://{domain}/hermes/mcp-oauth/callback`` (no port):
++# the user's browser never reaches this process directly. nginx forwards the
++# callback to the broker, which resolves ``state`` -> ``port`` via the route
++# file written here and proxies to ``127.0.0.1:{port}/callback``. Each process
++# still binds its own random callback port locally; the port is just never
++# exposed publicly, so multiple concurrent users no longer collide on a shared
++# registered port (the root cause of the old ``Address already in use``
++# failures — see docs/mcp-oauth-state-routing.md).
++_OAUTH_ROUTE_DIR = "/tmp/hermes_oauth_routes"
++
++# ``state`` of the in-flight flow, parsed from the authorization URL in
++# ``_redirect_handler``. Tracked module-globally (same legacy pattern as
++# ``_oauth_port``) so ``_wait_for_callback`` can delete the route file in its
++# finally block regardless of success/failure/skip.
++_oauth_state: str | None = None
++
++
++def _write_state_route(state: str, port: int) -> None:
++    """Persist ``{state} -> {port}`` so the broker can route the callback.
++
++    Atomic temp-file + ``os.replace``. Non-fatal: in local mode (no nginx)
++    the callback reaches the local listener directly and this file is never
++    read, so a write failure must not abort the OAuth flow.
++    """
++    try:
++        os.makedirs(_OAUTH_ROUTE_DIR, exist_ok=True)
++        path = os.path.join(_OAUTH_ROUTE_DIR, state)
++        tmp = f"{path}.tmp.{os.getpid()}"
++        with open(tmp, "w") as fh:
++            fh.write(str(port))
++        os.replace(tmp, path)
++    except OSError:
++        logger.debug("could not write OAuth state route for %s", state)
++
++
++def _cleanup_state_route(state: str | None) -> None:
++    """Remove the state route file after a flow completes, fails, or skips."""
++    if not state:
++        return
++    try:
++        os.unlink(os.path.join(_OAUTH_ROUTE_DIR, state))
++    except FileNotFoundError:
++        pass
++    except OSError:
++        logger.debug("could not remove OAuth state route for %s", state)
++
++
++# ---------------------------------------------------------------------------
++# Pending-flow registry (scenario B: agent 401 -> frontend "authorize" prompt)
++# ---------------------------------------------------------------------------
++# When the SDK's redirect handler fires we stash the authorization URL +
++# callback port here. ``mcp_tool``'s needs_reauth path reads it via
++# ``get_pending_oauth_authorization_url()`` so the frontend can prompt the
++# user to authorize in-browser (chat.html ``needs_reauth``/``oauth_url``).
++# Cleared on completion/failure.
++_pending_oauth_flows_lock = threading.Lock()
++# Keyed by callback port (one outstanding flow per process in practice).
++_pending_oauth_flows: dict[int, dict] = {}
++
++
++def register_pending_oauth_flow(
++    port: int, authorization_url: str, server_name: str, state: str | None
++) -> None:
++    with _pending_oauth_flows_lock:
++        _pending_oauth_flows[port] = {
++            "authorization_url": authorization_url,
++            "callback_port": port,
++            "server_name": server_name,
++            "state": state,
++            "created_at": time.time(),
++            "status": "awaiting_callback",
++        }
++
++
++def get_pending_oauth_authorization_url() -> dict | None:
++    """Return the most recent awaiting-callback flow, or None.
++
++    Used by ``mcp_tool``'s reauth path (scenario B) to surface an
++    ``oauth_url`` to the frontend alongside ``needs_reauth``.
++    """
++    with _pending_oauth_flows_lock:
++        if not _pending_oauth_flows:
++            return None
++        latest = max(
++            _pending_oauth_flows.values(), key=lambda f: f.get("created_at", 0)
++        )
++        if latest.get("status") != "awaiting_callback":
++            return None
++        return dict(latest)
++
++
++def mark_oauth_flow_completed(port: int) -> None:
++    with _pending_oauth_flows_lock:
++        flow = _pending_oauth_flows.pop(port, None)
++    if flow:
++        _cleanup_state_route(flow.get("state"))
++
++
++def mark_oauth_flow_failed(port: int) -> None:
++    with _pending_oauth_flows_lock:
++        flow = _pending_oauth_flows.pop(port, None)
++    if flow:
++        _cleanup_state_route(flow.get("state"))
++
++
+ # ---------------------------------------------------------------------------
+ # Helpers
+ # ---------------------------------------------------------------------------
+@@ -403,6 +516,25 @@ async def _redirect_handler(authorization_url: str) -> None:
+     Opens the browser automatically when possible; always prints the URL
+     as a fallback for headless/SSH/gateway environments.
+     """
++    # Multi-user routing (behind nginx): persist ``state -> port`` so the
++    # broker can forward the public callback to this process, and register
++    # the pending flow so scenario B (agent 401) can surface the URL to the
++    # frontend. The state is appended by the SDK to the authorization URL.
++    global _oauth_state
++    _oauth_state = None
++    if _oauth_port is not None:
++        try:
++            parsed = urlparse(authorization_url)
++            state = parse_qs(parsed.query).get("state", [None])[0]
++        except (ValueError, TypeError):
++            state = None
++        _oauth_state = state
++        if state:
++            _write_state_route(state, _oauth_port)
++        register_pending_oauth_flow(
++            _oauth_port, authorization_url, _oauth_server_name, state
++        )
++
+     msg = (
+         f"\n  MCP OAuth: authorization required.\n"
+         f"  Open this URL in your browser:\n\n"
+@@ -416,7 +548,14 @@ async def _redirect_handler(authorization_url: str) -> None:
+     # opened.  Two ways out: paste the redirect URL back (default fallback,
+     # offered by _wait_for_callback on interactive TTYs), or set up an SSH
+     # port forward so the redirect tunnels through.
+-    if _oauth_port and (os.getenv("SSH_CLIENT") or os.getenv("SSH_TTY")):
++    #
++    # Behind nginx (HERMES_NGINX_DOMAIN) the redirect_uri is the public
++    # state-routed path, so the browser reaches the broker normally and none
++    # of this SSH/paste guidance applies.
++    _has_public_route = bool(os.environ.get("HERMES_NGINX_DOMAIN", "").strip())
++    if _oauth_port and not _has_public_route and (
++        os.getenv("SSH_CLIENT") or os.getenv("SSH_TTY")
++    ):
+         print(
+             f"  Remote session detected. After you authorize, the provider redirects to\n"
+             f"    http://127.0.0.1:{_oauth_port}/callback\n"
+@@ -523,15 +662,19 @@ async def _wait_for_callback() -> tuple[str, str | None]:
+         server.server_close()
+ 
+     if result["error"] == _USER_SKIPPED_SENTINEL:
++        mark_oauth_flow_failed(_oauth_port or -1)
+         raise OAuthNonInteractiveError("user_skipped")
+     if result["error"]:
++        mark_oauth_flow_failed(_oauth_port or -1)
+         raise RuntimeError(f"OAuth authorization failed: {result['error']}")
+     if result["auth_code"] is None:
++        mark_oauth_flow_failed(_oauth_port or -1)
+         raise OAuthNonInteractiveError(
+             "OAuth callback timed out — no authorization code received. "
+             "Ensure you completed the browser authorization flow."
+         )
+ 
++    mark_oauth_flow_completed(_oauth_port or -1)
+     return result["auth_code"], result["state"]
+ 
+ 
+@@ -640,6 +783,21 @@ def remove_oauth_tokens(server_name: str) -> None:
+ # ---------------------------------------------------------------------------
+ 
+ 
++def _redirect_uri(port: int) -> str:
++    """The OAuth ``redirect_uri`` for this environment.
++
++    Behind nginx (``HERMES_NGINX_DOMAIN`` set) this is the PUBLIC state-routed
++    path the broker proxies; the user's browser redirects there and the broker
++    resolves ``state`` back to this process's local port. Without a public
++    domain we fall back to the upstream localhost listener (single-user /
++    interactive-with-paste / SSH-tunnel mode).
++    """
++    domain = os.environ.get("HERMES_NGINX_DOMAIN", "").strip()
++    if domain:
++        return f"https://{domain}/hermes/mcp-oauth/callback"
++    return f"http://127.0.0.1:{port}/callback"
++
++
+ def _configure_callback_port(cfg: dict) -> int:
+     """Pick or validate the OAuth callback port.
+ 
+@@ -674,7 +832,7 @@ def _build_client_metadata(cfg: dict) -> "OAuthClientMetadata":
+         )
+     client_name = cfg.get("client_name", "Hermes Agent")
+     scope = cfg.get("scope")
+-    redirect_uri = f"http://127.0.0.1:{port}/callback"
++    redirect_uri = _redirect_uri(port)
+ 
+     metadata_kwargs: dict[str, Any] = {
+         "client_name": client_name,
+@@ -701,7 +859,7 @@ def _maybe_preregister_client(
+     if not client_id:
+         return
+     port = cfg["_resolved_port"]
+-    redirect_uri = f"http://127.0.0.1:{port}/callback"
++    redirect_uri = _redirect_uri(port)
+ 
+     info_dict: dict[str, Any] = {
+         "client_id": client_id,
+@@ -753,6 +911,9 @@ def build_oauth_auth(
+     cfg = dict(oauth_config or {})  # copy — we mutate _resolved_port
+     storage = HermesTokenStorage(server_name)
+ 
++    global _oauth_server_name
++    _oauth_server_name = server_name
++
+     if not _is_interactive() and not storage.has_cached_tokens():
+         raise OAuthNonInteractiveError(
+             "MCP OAuth for "

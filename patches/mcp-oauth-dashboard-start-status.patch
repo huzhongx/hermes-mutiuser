@@ -1,0 +1,150 @@
+diff --git a/hermes_cli/web_server.py b/hermes_cli/web_server.py
+index 3c38717e0..ccb3dc2e8 100644
+--- a/hermes_cli/web_server.py
++++ b/hermes_cli/web_server.py
+@@ -8190,6 +8190,145 @@ async def test_mcp_server(name: str, profile: Optional[str] = None):
+     }
+ 
+ 
++# ── MCP server OAuth: frontend-driven authorization (scenario A) ─────────────
++# The dashboard's MCP settings panel calls these to kick off an OAuth flow for a
++# server whose ``auth: oauth`` config has no cached token yet. The probe's
++# connect triggers the SDK's OAuth flow; the redirect handler registers the
++# authorization URL via tools.mcp_oauth.register_pending_oauth_flow, which we
++# surface back so the frontend can window.open() it. The public callback is
++# routed by the broker (state -> port), so the token lands on disk
++# asynchronously; /oauth/status polls the token file.
++# Thread-local marker so the background probe can report outcome to status().
++import threading as _mcp_oauth_threading
++
++_mcp_oauth_outcomes: dict = {}
++_mcp_oauth_outcomes_lock = _mcp_oauth_threading.Lock()
++
++
++@app.post("/api/mcp/servers/{name}/oauth/start")
++async def mcp_server_oauth_start(
++    name: str, request: Request, profile: Optional[str] = None
++):
++    """Start an MCP OAuth flow; return the authorization URL (waits ≤30s).
++
++    Token-protected. Clears any stale cached tokens first, then runs a
++    background probe (which drives the OAuth flow). Returns one of:
++      {status: completed}            — token already present / just obtained
++      {status: awaiting_callback, authorization_url} — user must authorize
++      {status: timeout}              — no URL within 30s
++      {status: failed, error}
++    """
++    _require_token(request)
++    from hermes_cli.mcp_config import _get_mcp_servers, _resolve_mcp_server_config
++
++    with _profile_scope(profile):
++        servers = _get_mcp_servers()
++    if name not in servers:
++        raise HTTPException(status_code=404, detail=f"Server '{name}' not found")
++    server_cfg = servers[name]
++    if (server_cfg.get("auth") or "").lower() != "oauth":
++        raise HTTPException(
++            status_code=400,
++            detail=f"Server '{name}' is not configured with auth: oauth",
++        )
++
++    # Clear stale tokens + pending-flow state so this is a clean flow.
++    try:
++        from tools.mcp_oauth import HermesTokenStorage, _pending_oauth_flows
++        from tools.mcp_oauth import (
++            _pending_oauth_flows_lock as _pofl,
++        )
++        with _profile_scope(profile):
++            HermesTokenStorage(name).remove()
++    except Exception:
++        _log.debug("mcp oauth/start: could not clear tokens for %s", name)
++    with _mcp_oauth_outcomes_lock:
++        _mcp_oauth_outcomes[name] = {"status": "running", "error": None}
++
++    def _run_probe():
++        try:
++            from hermes_cli.mcp_config import _probe_single_server
++            with _profile_scope(profile):
++                _probe_single_server(name, server_cfg)
++            with _mcp_oauth_outcomes_lock:
++                _mcp_oauth_outcomes[name] = {"status": "done", "error": None}
++        except Exception as exc:
++            with _mcp_oauth_outcomes_lock:
++                _mcp_oauth_outcomes[name] = {"status": "failed", "error": str(exc)}
++
++    # Fire the probe in the background; it drives the OAuth flow and registers
++    # the authorization URL via the redirect handler.
++    threading.Thread(target=_run_probe, daemon=True).start()
++
++    # Already authorized? (probe may complete instantly if tokens exist)
++    try:
++        from tools.mcp_oauth import HermesTokenStorage
++        with _profile_scope(profile):
++            if HermesTokenStorage(name).has_cached_tokens():
++                return {"status": "completed"}
++    except Exception:
++        pass
++
++    # Wait up to 30s for the authorization URL to be registered.
++    from tools.mcp_oauth import get_pending_oauth_authorization_url
++    deadline = 30.0
++    elapsed = 0.0
++    while elapsed < deadline:
++        pending = get_pending_oauth_authorization_url()
++        if pending and pending.get("server_name") == name:
++            return {
++                "status": "awaiting_callback",
++                "authorization_url": pending["authorization_url"],
++            }
++        # Probe errored before producing a URL.
++        with _mcp_oauth_outcomes_lock:
++            st = _mcp_oauth_outcomes.get(name, {}).get("status")
++        if st == "failed":
++            return {
++                "status": "failed",
++                "error": _mcp_oauth_outcomes[name].get("error") or "probe failed",
++            }
++        if st == "done":
++            # Probe finished without an OAuth URL — server didn't require auth
++            # or connected with existing creds.
++            return {"status": "completed"}
++        await asyncio.sleep(0.5)
++        elapsed += 0.5
++
++    return {"status": "timeout"}
++
++
++@app.get("/api/mcp/servers/{name}/oauth/status")
++async def mcp_server_oauth_status(
++    name: str, request: Request, profile: Optional[str] = None
++):
++    """Poll an MCP OAuth flow. Token-protected (read-only status).
++
++    Returns {status: completed|failed|awaiting_callback, error?}. Completion is
++    signaled by the token file appearing on disk (the SDK persists it when the
++    callback exchanges the code).
++    """
++    _require_token(request)
++    from tools.mcp_oauth import (
++        HermesTokenStorage,
++        get_pending_oauth_authorization_url,
++    )
++    try:
++        with _profile_scope(profile):
++            if HermesTokenStorage(name).has_cached_tokens():
++                return {"status": "completed"}
++    except Exception:
++        pass
++    pending = get_pending_oauth_authorization_url()
++    if pending and pending.get("server_name") == name:
++        return {"status": "awaiting_callback"}
++    with _mcp_oauth_outcomes_lock:
++        outcome = _mcp_oauth_outcomes.get(name)
++    if outcome and outcome.get("status") == "failed":
++        return {"status": "failed", "error": outcome.get("error")}
++    return {"status": "awaiting_callback"}
++
++
+ class MCPEnabledToggle(BaseModel):
+     enabled: bool
+     profile: Optional[str] = None

@@ -1,0 +1,73 @@
+diff --git a/hermes_broker.py b/hermes_broker.py
+index 11f61c0..e029635 100644
+--- a/hermes_broker.py
++++ b/hermes_broker.py
+@@ -2279,6 +2279,68 @@ async def docs_index():
+     return RedirectResponse(url="/docs/api")
+ 
+ 
++# ── MCP OAuth callback: state-based routing to the owning process ─────────────
++# A user's OAuth provider redirects the browser to the PUBLIC path
++# ``/hermes/mcp-oauth/callback?code=…&state=…`` (no port). The hermes process
++# wrote ``{state} -> {port}`` to /tmp/hermes_oauth_routes/ when its OAuth flow
++# started (tools/mcp_oauth.py). We resolve the port here and forward to that
++# process's local ``127.0.0.1:{port}/callback`` listener. Multiple users can
++# run OAuth concurrently because each has its own ``state``.
++_OAUTH_ROUTE_DIR = "/tmp/hermes_oauth_routes"
++
++
++@app.api_route("/mcp-oauth/callback", methods=["GET"])
++async def mcp_oauth_callback(request: Request):
++    """Route an MCP OAuth callback to the correct Hermes process via state."""
++    params = dict(request.query_params)
++    state = params.get("state")
++    code = params.get("code")
++    error = params.get("error")
++
++    if not state:
++        return HTMLResponse(
++            "<html><body><h2>OAuth Error</h2><p>Missing state parameter.</p></body></html>",
++            status_code=400,
++        )
++
++    # Resolve state -> port from the route file the process wrote.
++    port = None
++    route_file = os.path.join(_OAUTH_ROUTE_DIR, state)
++    try:
++        with open(route_file) as fh:
++            port = int(fh.read().strip())
++    except (FileNotFoundError, ValueError):
++        port = None
++
++    if port is None:
++        return HTMLResponse(
++            "<html><body><h2>OAuth session not found</h2>"
++            "<p>Could not find the OAuth session (it may have expired). "
++            "Please try authorizing again.</p></body></html>",
++            status_code=404,
++        )
++
++    qs = f"?code={code}&state={state}" if code else f"?error={error}&state={state}"
++    url = f"http://127.0.0.1:{port}/callback{qs}"
++    try:
++        session = await _get_proxy_http()
++        async with session.get(
++            url, timeout=aiohttp.ClientTimeout(total=10)
++        ) as resp:
++            body = await resp.read()
++            return HTMLResponse(
++                content=body,
++                status_code=resp.status,
++            )
++    except Exception as exc:
++        logger.warning("OAuth callback forward to port %s failed: %s", port, exc)
++        return HTMLResponse(
++            "<html><body><h2>OAuth Error</h2>"
++            "<p>The agent process is not responding. Please try again.</p></body></html>",
++            status_code=502,
++        )
++
++
+ # ── Generic HTTP proxy catch-all (MUST be last /api/* route) ──
+ 
+ @app.api_route("/api/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
