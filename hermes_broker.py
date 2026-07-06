@@ -26,6 +26,7 @@ import os
 import re
 import secrets
 import shutil
+import tempfile
 import zipfile
 import time
 import uuid
@@ -119,6 +120,88 @@ def _is_space_blacklisted(user_id: str, skill_name: str) -> bool:
         return False
     blacklist = _load_space_blacklist().get(space, [])
     return skill_name in blacklist
+
+
+# ─────────────────────────────────────────────────────────
+# Space-type skill-MCP injection
+# ─────────────────────────────────────────────────────────
+# Mirror of the space blacklist: a per-space-type map of skill MCP servers
+# to inject into a freshly-copied user config on first spawn. E.g. the
+# ``talent`` space gets mock-interview / position-recommender / resume-intake
+# / resume_optimizer MCPs so a brand-new talent user can use those skills
+# without an operator hand-registering the MCPs. hiring/expert and plain
+# (non-waw) users get nothing (not listed -> not injected). Operator-maintained
+# in {_SPACE_MCP_FILE}, hot-reloaded on mtime change (no broker restart).
+_SPACE_MCP_FILE = _HERMES_CONFIG_HOME / "skills_space_mcp.json"
+_SPACE_MCP_CACHE: dict[str, dict] = {"mtime": 0.0, "data": {}}
+
+
+def _load_space_mcp() -> dict:
+    """Load (and cache) the space-type skill-MCP map.
+
+    Shape: ``{<space_type>: {<mcp_name>: <mcp_config_dict>}}``. Reloads when
+    the config file mtime changes so operator edits take effect on the next
+    spawn without a broker restart. Malformed/missing file -> empty dict.
+    """
+    try:
+        mtime = _SPACE_MCP_FILE.stat().st_mtime
+    except OSError:
+        _SPACE_MCP_CACHE["mtime"] = 0.0
+        _SPACE_MCP_CACHE["data"] = {}
+        return {}
+    if mtime != _SPACE_MCP_CACHE["mtime"]:
+        try:
+            with open(_SPACE_MCP_FILE, "r", encoding="utf-8") as f:
+                data = {}
+                raw = json.load(f)
+            if isinstance(raw, dict):
+                for space, mcps in raw.items():
+                    if isinstance(mcps, dict):
+                        data[str(space)] = {
+                            str(n): c for n, c in mcps.items() if isinstance(c, dict)
+                        }
+        except (OSError, ValueError) as exc:
+            logger.warning("space MCP map parse failed (%s): %s", _SPACE_MCP_FILE, exc)
+            data = {}
+        _SPACE_MCP_CACHE["mtime"] = mtime
+        _SPACE_MCP_CACHE["data"] = data
+    return _SPACE_MCP_CACHE["data"]
+
+
+def _space_mcp_for(user_id: str) -> dict:
+    """Return the ``{mcp_name: mcp_config}`` dict to inject for ``user_id``'s
+    space type, or ``{}`` if the space type has no MCPs (or is not a waw user).
+    """
+    space = _parse_space_type(user_id)
+    if not space:
+        return {}
+    return _load_space_mcp().get(space, {}) or {}
+
+
+def _atomic_write_yaml(path, data) -> None:
+    """Atomically write ``data`` as YAML to ``path``.
+
+    Writes to a temp file in the same dir, validates it parses back, then
+    ``os.replace`` (atomic). Avoids the ``open("w")``-truncates-then-fails
+    data-loss bug — if the dump or validation throws, the original file is
+    untouched.
+    """
+    import yaml as _yaml
+    d = os.path.dirname(str(path))
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".config.yaml.tmp.", suffix="")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            _yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False,
+                            default_flow_style=False, width=10000)
+        with open(tmp, "r", encoding="utf-8") as f:
+            _yaml.safe_load(f)  # validate before replacing
+        os.replace(tmp, str(path))
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 @dataclass
@@ -489,6 +572,42 @@ class ProcessBroker:
             dst = user_home / fname
             if src.exists() and not (dst.exists() or dst.is_symlink()):
                 shutil.copy2(str(src), str(dst))
+
+                # Inject space-type-scoped skill MCPs into the freshly-copied
+                # config (first creation only — gated by the same `not
+                # dst.exists()` above). E.g. a new talent user gets
+                # mock-interview / position-recommender / resume-intake /
+                # resume_optimizer MCPs so those skills work without a manual
+                # register step. See skills_space_mcp.json (hot-reloaded).
+                if fname == "config.yaml":
+                    space_mcps = _space_mcp_for(user_id)
+                    if space_mcps:
+                        try:
+                            import yaml as _yaml
+                            with open(str(dst), "r", encoding="utf-8") as f:
+                                cfg = _yaml.safe_load(f) or {}
+                            mcp = cfg.get("mcp_servers")
+                            if not isinstance(mcp, dict):
+                                mcp = {}
+                                cfg["mcp_servers"] = mcp
+                            # Only inject MCPs the config doesn't already have
+                            # (first-copy config mirrors the global = empty,
+                            # but this guard keeps it safe if that changes).
+                            added = False
+                            for mcp_name, mcp_conf in space_mcps.items():
+                                if mcp_name not in mcp:
+                                    mcp[mcp_name] = mcp_conf
+                                    added = True
+                            if added:
+                                _atomic_write_yaml(dst, cfg)
+                                logger.info(
+                                    "[%s] Injected %d space MCP(s) into config.yaml",
+                                    user_id, sum(1 for n in space_mcps if n in mcp),
+                                )
+                        except Exception as exc:
+                            logger.warning(
+                                "[%s] space MCP injection failed: %s", user_id, exc
+                            )
 
         # Symlink shared config files from the global HERMES_HOME
         for fname in self._SHARED_SYMLINK_FILES:
