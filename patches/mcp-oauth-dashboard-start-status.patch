@@ -1,8 +1,8 @@
 diff --git a/hermes_cli/web_server.py b/hermes_cli/web_server.py
-index 3c38717e0..f7df61b22 100644
+index 3c38717e0..b81b88a41 100644
 --- a/hermes_cli/web_server.py
 +++ b/hermes_cli/web_server.py
-@@ -8190,6 +8190,156 @@ async def test_mcp_server(name: str, profile: Optional[str] = None):
+@@ -8190,6 +8190,188 @@ async def test_mcp_server(name: str, profile: Optional[str] = None):
      }
  
  
@@ -62,25 +62,57 @@ index 3c38717e0..f7df61b22 100644
 +        _mcp_oauth_outcomes[name] = {"status": "running", "error": None}
 +
 +    def _run_probe():
++        """Drive ONE OAuth flow (token exchange) without an MCP connect retry loop.
++
++        We deliberately do NOT use ``_probe_single_server`` here: it runs a full
++        ``MCPServerTask`` connect with a retry loop (``_MAX_INITIAL_CONNECT_RETRIES``),
++        and each retry re-enters the SDK's ``async_auth_flow`` which generates a
++        FRESH OAuth state and overwrites the module-global ``_oauth_port``. By the
++        time the user finishes authorizing in their browser, the probe is on retry
++        N with a different state, so the callback's state no longer matches and the
++        token exchange never completes (8 authorize URLs in the log, 0 tokens).
++
++        Instead we drive the SDK's ``OAuthClientProvider`` (an ``httpx.Auth``
++        subclass) with a SINGLE httpx request. The 401 from the MCP server fires
++        ``async_auth_flow`` exactly once — one state, one callback wait, no retry
++        clobbering. We give it a long timeout (5 min) so the user has time to
++        authorize in the browser; the request handler already returned the
++        authorization_url after ~3s, so this thread just completes the exchange
++        and lets the token land on disk for /oauth/status to see.
++        """
 +        try:
-+            from hermes_cli.mcp_config import _probe_single_server
-+            with _profile_scope(profile):
-+                _probe_single_server(name, server_cfg)
++            import asyncio as _aio
++            import httpx as _httpx
++            from tools.mcp_oauth_manager import get_manager
++
++            async def _drive():
++                provider = get_manager().get_or_build_provider(
++                    name, server_cfg["url"], server_cfg.get("oauth")
++                )
++                if provider is None:
++                    raise RuntimeError("OAuth provider unavailable (MCP SDK too old?)")
++                # One request is enough: the 401 response triggers the full OAuth
++                # flow inline (discovery → authorize → callback → token exchange).
++                timeout = _httpx.Timeout(300.0, connect=15.0)
++                async with _httpx.AsyncClient(auth=provider, timeout=timeout) as client:
++                    await client.head(server_cfg["url"])
++                return True
++
++            loop = _aio.new_event_loop()
++            try:
++                loop.run_until_complete(_drive())
++            finally:
++                loop.close()
 +            with _mcp_oauth_outcomes_lock:
 +                _mcp_oauth_outcomes[name] = {"status": "done", "error": None}
 +        except Exception as exc:
 +            with _mcp_oauth_outcomes_lock:
 +                _mcp_oauth_outcomes[name] = {"status": "failed", "error": str(exc)}
 +
-+    # Fire the probe in the background; it drives the OAuth flow and registers
-+    # the authorization URL via the redirect handler.
-+    #
-+    # NOTE: ``_run_probe`` wraps the probe in ``_profile_scope``, which takes
-+    # the process-wide ``_SKILLS_PROFILE_LOCK``. The wait-loop below must NOT
-+    # also enter ``_profile_scope`` (e.g. for the token-file check) or it will
-+    # block on that lock for the entire ~18s OAuth flow the probe holds it —
-+    # deadlocking /oauth/start until the probe times out. The dashboard runs
-+    # under its own HERMES_HOME, so the token-file check needs no scope.
++    # Fire the driver in the background; it runs ONE OAuth flow and registers
++    # the authorization URL via the redirect handler. No _profile_scope here
++    # (the dashboard runs under its own HERMES_HOME), and crucially no MCP
++    # connect-retry loop to clobber the OAuth state.
 +    threading.Thread(target=_run_probe, daemon=True).start()
 +
 +    # Already authorized? (probe may complete instantly if tokens exist)
