@@ -1,0 +1,23 @@
+diff --git a/tools/mcp_oauth_manager.py b/tools/mcp_oauth_manager.py
+index da9125d53..c87733b67 100644
+--- a/tools/mcp_oauth_manager.py
++++ b/tools/mcp_oauth_manager.py
+@@ -412,8 +412,8 @@ class MCPOAuthManager:
+             _OAUTH_AVAILABLE,
+             _build_client_metadata,
+             _configure_callback_port,
+-            _is_interactive,
+             _maybe_preregister_client,
++            _oauth_can_proceed,
+             _redirect_handler,
+             _wait_for_callback,
+         )
+@@ -424,7 +424,7 @@ class MCPOAuthManager:
+         cfg = dict(entry.oauth_config or {})
+         storage = HermesTokenStorage(server_name)
+ 
+-        if not _is_interactive() and not storage.has_cached_tokens():
++        if not _oauth_can_proceed() and not storage.has_cached_tokens():
+             raise OAuthNonInteractiveError(
+                 "MCP OAuth for "
+                 f"'{server_name}': non-interactive environment and no "

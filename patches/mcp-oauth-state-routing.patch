@@ -1,5 +1,5 @@
 diff --git a/tools/mcp_oauth.py b/tools/mcp_oauth.py
-index 3f85f4859..05f706104 100644
+index 3f85f4859..f9b7314ce 100644
 --- a/tools/mcp_oauth.py
 +++ b/tools/mcp_oauth.py
 @@ -93,6 +93,10 @@ class OAuthNonInteractiveError(RuntimeError):
@@ -129,7 +129,30 @@ index 3f85f4859..05f706104 100644
  # ---------------------------------------------------------------------------
  # Helpers
  # ---------------------------------------------------------------------------
-@@ -403,6 +516,25 @@ async def _redirect_handler(authorization_url: str) -> None:
+@@ -143,6 +256,22 @@ def _is_interactive() -> bool:
+         return False
+ 
+ 
++def _oauth_can_proceed() -> bool:
++    """Whether an OAuth flow can complete without a server-side TTY.
++
++    The CLI's non-interactive guard refuses to start a flow when there's no
++    TTY and no cached token — correct for a single-user CLI where the
++    authorization code arrives back over the same terminal. But on Hermes
++    Platform the flow is browser-driven and routed through the public nginx
++    callback (``HERMES_NGINX_DOMAIN``): the user authorizes in their own
++    browser and the broker forwards the callback to this process. No server
++    TTY is needed, so the guard must pass when a public callback route exists.
++    """
++    if _is_interactive():
++        return True
++    return bool(os.environ.get("HERMES_NGINX_DOMAIN", "").strip())
++
++
+ def _can_open_browser() -> bool:
+     """Return True if opening a browser is likely to work."""
+     # Explicit SSH session → no local display
+@@ -403,6 +532,25 @@ async def _redirect_handler(authorization_url: str) -> None:
      Opens the browser automatically when possible; always prints the URL
      as a fallback for headless/SSH/gateway environments.
      """
@@ -155,7 +178,7 @@ index 3f85f4859..05f706104 100644
      msg = (
          f"\n  MCP OAuth: authorization required.\n"
          f"  Open this URL in your browser:\n\n"
-@@ -416,7 +548,14 @@ async def _redirect_handler(authorization_url: str) -> None:
+@@ -416,7 +564,14 @@ async def _redirect_handler(authorization_url: str) -> None:
      # opened.  Two ways out: paste the redirect URL back (default fallback,
      # offered by _wait_for_callback on interactive TTYs), or set up an SSH
      # port forward so the redirect tunnels through.
@@ -171,7 +194,7 @@ index 3f85f4859..05f706104 100644
          print(
              f"  Remote session detected. After you authorize, the provider redirects to\n"
              f"    http://127.0.0.1:{_oauth_port}/callback\n"
-@@ -523,15 +662,19 @@ async def _wait_for_callback() -> tuple[str, str | None]:
+@@ -523,15 +678,19 @@ async def _wait_for_callback() -> tuple[str, str | None]:
          server.server_close()
  
      if result["error"] == _USER_SKIPPED_SENTINEL:
@@ -191,7 +214,7 @@ index 3f85f4859..05f706104 100644
      return result["auth_code"], result["state"]
  
  
-@@ -640,6 +783,21 @@ def remove_oauth_tokens(server_name: str) -> None:
+@@ -640,6 +799,21 @@ def remove_oauth_tokens(server_name: str) -> None:
  # ---------------------------------------------------------------------------
  
  
@@ -213,7 +236,7 @@ index 3f85f4859..05f706104 100644
  def _configure_callback_port(cfg: dict) -> int:
      """Pick or validate the OAuth callback port.
  
-@@ -674,7 +832,7 @@ def _build_client_metadata(cfg: dict) -> "OAuthClientMetadata":
+@@ -674,7 +848,7 @@ def _build_client_metadata(cfg: dict) -> "OAuthClientMetadata":
          )
      client_name = cfg.get("client_name", "Hermes Agent")
      scope = cfg.get("scope")
@@ -222,7 +245,7 @@ index 3f85f4859..05f706104 100644
  
      metadata_kwargs: dict[str, Any] = {
          "client_name": client_name,
-@@ -701,7 +859,7 @@ def _maybe_preregister_client(
+@@ -701,7 +875,7 @@ def _maybe_preregister_client(
      if not client_id:
          return
      port = cfg["_resolved_port"]
@@ -231,13 +254,15 @@ index 3f85f4859..05f706104 100644
  
      info_dict: dict[str, Any] = {
          "client_id": client_id,
-@@ -753,6 +911,9 @@ def build_oauth_auth(
+@@ -753,7 +927,10 @@ def build_oauth_auth(
      cfg = dict(oauth_config or {})  # copy — we mutate _resolved_port
      storage = HermesTokenStorage(server_name)
  
+-    if not _is_interactive() and not storage.has_cached_tokens():
 +    global _oauth_server_name
 +    _oauth_server_name = server_name
 +
-     if not _is_interactive() and not storage.has_cached_tokens():
++    if not _oauth_can_proceed() and not storage.has_cached_tokens():
          raise OAuthNonInteractiveError(
              "MCP OAuth for "
+             f"'{server_name}': non-interactive environment and no cached tokens "
