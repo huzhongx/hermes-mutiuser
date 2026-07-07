@@ -1,8 +1,8 @@
 diff --git a/tools/mcp_oauth_manager.py b/tools/mcp_oauth_manager.py
-index da9125d53..c87733b67 100644
+index da9125d53..b1dd7a052 100644
 --- a/tools/mcp_oauth_manager.py
 +++ b/tools/mcp_oauth_manager.py
-@@ -412,8 +412,8 @@ class MCPOAuthManager:
+@@ -412,9 +412,10 @@ class MCPOAuthManager:
              _OAUTH_AVAILABLE,
              _build_client_metadata,
              _configure_callback_port,
@@ -10,9 +10,11 @@ index da9125d53..c87733b67 100644
              _maybe_preregister_client,
 +            _oauth_can_proceed,
              _redirect_handler,
++            _set_oauth_server_name,
              _wait_for_callback,
          )
-@@ -424,7 +424,7 @@ class MCPOAuthManager:
+ 
+@@ -424,7 +425,7 @@ class MCPOAuthManager:
          cfg = dict(entry.oauth_config or {})
          storage = HermesTokenStorage(server_name)
  
@@ -21,3 +23,15 @@ index da9125d53..c87733b67 100644
              raise OAuthNonInteractiveError(
                  "MCP OAuth for "
                  f"'{server_name}': non-interactive environment and no "
+@@ -433,6 +434,11 @@ class MCPOAuthManager:
+                 "authorization."
+             )
+ 
++        # Mirror build_oauth_auth: record the server name so _redirect_handler
++        # can tag the pending-flow registry (used by the dashboard /oauth/start
++        # path to match a pending authorization URL back to this server).
++        _set_oauth_server_name(server_name)
++
+         _configure_callback_port(cfg)
+         client_metadata = _build_client_metadata(cfg)
+         _maybe_preregister_client(storage, cfg, client_metadata)

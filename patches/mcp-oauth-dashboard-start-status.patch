@@ -1,8 +1,8 @@
 diff --git a/hermes_cli/web_server.py b/hermes_cli/web_server.py
-index 3c38717e0..ccb3dc2e8 100644
+index 3c38717e0..f7df61b22 100644
 --- a/hermes_cli/web_server.py
 +++ b/hermes_cli/web_server.py
-@@ -8190,6 +8190,145 @@ async def test_mcp_server(name: str, profile: Optional[str] = None):
+@@ -8190,6 +8190,156 @@ async def test_mcp_server(name: str, profile: Optional[str] = None):
      }
  
  
@@ -74,14 +74,20 @@ index 3c38717e0..ccb3dc2e8 100644
 +
 +    # Fire the probe in the background; it drives the OAuth flow and registers
 +    # the authorization URL via the redirect handler.
++    #
++    # NOTE: ``_run_probe`` wraps the probe in ``_profile_scope``, which takes
++    # the process-wide ``_SKILLS_PROFILE_LOCK``. The wait-loop below must NOT
++    # also enter ``_profile_scope`` (e.g. for the token-file check) or it will
++    # block on that lock for the entire ~18s OAuth flow the probe holds it —
++    # deadlocking /oauth/start until the probe times out. The dashboard runs
++    # under its own HERMES_HOME, so the token-file check needs no scope.
 +    threading.Thread(target=_run_probe, daemon=True).start()
 +
 +    # Already authorized? (probe may complete instantly if tokens exist)
 +    try:
 +        from tools.mcp_oauth import HermesTokenStorage
-+        with _profile_scope(profile):
-+            if HermesTokenStorage(name).has_cached_tokens():
-+                return {"status": "completed"}
++        if HermesTokenStorage(name).has_cached_tokens():
++            return {"status": "completed"}
 +    except Exception:
 +        pass
 +
@@ -91,7 +97,10 @@ index 3c38717e0..ccb3dc2e8 100644
 +    elapsed = 0.0
 +    while elapsed < deadline:
 +        pending = get_pending_oauth_authorization_url()
-+        if pending and pending.get("server_name") == name:
++        # Match by server name; fall back to any pending flow if the name
++        # wasn't tagged (defensive — every construction path tags it, but a
++        # mismatch must not strand the user with no URL).
++        if pending and (pending.get("server_name") in (name, "", None)):
 +            return {
 +                "status": "awaiting_callback",
 +                "authorization_url": pending["authorization_url"],
@@ -129,14 +138,16 @@ index 3c38717e0..ccb3dc2e8 100644
 +        HermesTokenStorage,
 +        get_pending_oauth_authorization_url,
 +    )
++    # No _profile_scope here: the dashboard runs under its own HERMES_HOME, and
++    # taking _SKILLS_PROFILE_LOCK would block for the whole OAuth flow if a
++    # /oauth/start probe is holding it (see the deadlock note in oauth_start).
 +    try:
-+        with _profile_scope(profile):
-+            if HermesTokenStorage(name).has_cached_tokens():
-+                return {"status": "completed"}
++        if HermesTokenStorage(name).has_cached_tokens():
++            return {"status": "completed"}
 +    except Exception:
 +        pass
 +    pending = get_pending_oauth_authorization_url()
-+    if pending and pending.get("server_name") == name:
++    if pending and (pending.get("server_name") in (name, "", None)):
 +        return {"status": "awaiting_callback"}
 +    with _mcp_oauth_outcomes_lock:
 +        outcome = _mcp_oauth_outcomes.get(name)

@@ -1,5 +1,5 @@
 diff --git a/tools/mcp_oauth.py b/tools/mcp_oauth.py
-index 3f85f4859..f9b7314ce 100644
+index 3f85f4859..6e630b6a7 100644
 --- a/tools/mcp_oauth.py
 +++ b/tools/mcp_oauth.py
 @@ -93,6 +93,10 @@ class OAuthNonInteractiveError(RuntimeError):
@@ -129,7 +129,7 @@ index 3f85f4859..f9b7314ce 100644
  # ---------------------------------------------------------------------------
  # Helpers
  # ---------------------------------------------------------------------------
-@@ -143,6 +256,22 @@ def _is_interactive() -> bool:
+@@ -143,6 +256,34 @@ def _is_interactive() -> bool:
          return False
  
  
@@ -149,10 +149,22 @@ index 3f85f4859..f9b7314ce 100644
 +    return bool(os.environ.get("HERMES_NGINX_DOMAIN", "").strip())
 +
 +
++def _set_oauth_server_name(server_name: str) -> None:
++    """Record the server name of the in-flight flow.
++
++    Both construction paths (``build_oauth_auth`` and the manager's
++    ``_build_provider``) call this so ``_redirect_handler`` tags the pending-
++    flow registry with the right server name — the dashboard's /oauth/start
++    matches a pending authorization URL back to the server by this name.
++    """
++    global _oauth_server_name
++    _oauth_server_name = server_name
++
++
  def _can_open_browser() -> bool:
      """Return True if opening a browser is likely to work."""
      # Explicit SSH session → no local display
-@@ -403,6 +532,25 @@ async def _redirect_handler(authorization_url: str) -> None:
+@@ -403,6 +544,25 @@ async def _redirect_handler(authorization_url: str) -> None:
      Opens the browser automatically when possible; always prints the URL
      as a fallback for headless/SSH/gateway environments.
      """
@@ -178,7 +190,7 @@ index 3f85f4859..f9b7314ce 100644
      msg = (
          f"\n  MCP OAuth: authorization required.\n"
          f"  Open this URL in your browser:\n\n"
-@@ -416,7 +564,14 @@ async def _redirect_handler(authorization_url: str) -> None:
+@@ -416,7 +576,14 @@ async def _redirect_handler(authorization_url: str) -> None:
      # opened.  Two ways out: paste the redirect URL back (default fallback,
      # offered by _wait_for_callback on interactive TTYs), or set up an SSH
      # port forward so the redirect tunnels through.
@@ -194,7 +206,7 @@ index 3f85f4859..f9b7314ce 100644
          print(
              f"  Remote session detected. After you authorize, the provider redirects to\n"
              f"    http://127.0.0.1:{_oauth_port}/callback\n"
-@@ -523,15 +678,19 @@ async def _wait_for_callback() -> tuple[str, str | None]:
+@@ -523,15 +690,19 @@ async def _wait_for_callback() -> tuple[str, str | None]:
          server.server_close()
  
      if result["error"] == _USER_SKIPPED_SENTINEL:
@@ -214,7 +226,7 @@ index 3f85f4859..f9b7314ce 100644
      return result["auth_code"], result["state"]
  
  
-@@ -640,6 +799,21 @@ def remove_oauth_tokens(server_name: str) -> None:
+@@ -640,6 +811,21 @@ def remove_oauth_tokens(server_name: str) -> None:
  # ---------------------------------------------------------------------------
  
  
@@ -236,7 +248,7 @@ index 3f85f4859..f9b7314ce 100644
  def _configure_callback_port(cfg: dict) -> int:
      """Pick or validate the OAuth callback port.
  
-@@ -674,7 +848,7 @@ def _build_client_metadata(cfg: dict) -> "OAuthClientMetadata":
+@@ -674,7 +860,7 @@ def _build_client_metadata(cfg: dict) -> "OAuthClientMetadata":
          )
      client_name = cfg.get("client_name", "Hermes Agent")
      scope = cfg.get("scope")
@@ -245,7 +257,7 @@ index 3f85f4859..f9b7314ce 100644
  
      metadata_kwargs: dict[str, Any] = {
          "client_name": client_name,
-@@ -701,7 +875,7 @@ def _maybe_preregister_client(
+@@ -701,7 +887,7 @@ def _maybe_preregister_client(
      if not client_id:
          return
      port = cfg["_resolved_port"]
@@ -254,13 +266,12 @@ index 3f85f4859..f9b7314ce 100644
  
      info_dict: dict[str, Any] = {
          "client_id": client_id,
-@@ -753,7 +927,10 @@ def build_oauth_auth(
+@@ -753,7 +939,9 @@ def build_oauth_auth(
      cfg = dict(oauth_config or {})  # copy — we mutate _resolved_port
      storage = HermesTokenStorage(server_name)
  
 -    if not _is_interactive() and not storage.has_cached_tokens():
-+    global _oauth_server_name
-+    _oauth_server_name = server_name
++    _set_oauth_server_name(server_name)
 +
 +    if not _oauth_can_proceed() and not storage.has_cached_tokens():
          raise OAuthNonInteractiveError(
