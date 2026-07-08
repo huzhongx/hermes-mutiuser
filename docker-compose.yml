@@ -52,9 +52,10 @@ services:
       # 用户会话数据（命名卷，自动持久化到 /var/lib/docker/volumes/）
       - sessions-data:/var/lib/hermes/sessions
 
-      # 镜像层已经 COPY 了 skills/cache/pairing/uv-python 等全局只读资源到 /root/.hermes/
-      # 下面这三个含密钥，**不要** COPY 进镜像（k8s 阶段 Secret 挂载；这里挂文件）
-      # 单机部署方案：直接 mount 主机文件，只读防止容器内被改
+      # 三个含密钥的文件（镜像里**没有**，必须从宿主机挂载）：
+      #   全新部署：从现网 scp 这三个文件到 CVM 的 /root/.hermes/（见 docs/tencent-cloud-deploy.md §5）
+      #   文件不存在时 docker 会挂成空目录 → broker spawn 会失败
+      #   如不想挂载（用镜像里的旧 secrets），注释掉这三行（但镜像当前不含 secrets，会 spawn 失败）
       - /root/.hermes/auth.json:/root/.hermes/auth.json:ro
       - /root/.hermes/.env:/root/.hermes/.env:ro
       - /root/.hermes/config.yaml:/root/.hermes/config.yaml:ro
