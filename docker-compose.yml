@@ -63,6 +63,12 @@ services:
       # （可选）宿主机日志目录，便于 ELK/SLS/Loki 直接采集
       # - /var/log/hermes:/var/log/hermes
 
+      # 覆盖容器内 nginx 配置为 broker-only 版（去掉 openclaw/hermes_api upstream）。
+      # CVM 单机部署只有 broker，原配置会因 openclaw DNS 解析失败让 nginx emerg。
+      # 这份配置保留 broker 全链路，把 openclaw/hermes_api 路径改成 503。
+      # 见 k8s/nginx-pod-broker-only.conf
+      - ./k8s/nginx-pod-broker-only.conf:/etc/nginx/conf.d/default.conf:ro
+
     # 健康检查：broker 起来了再认为 healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -fs http://127.0.0.1/broker/health || exit 1"]
