@@ -54,6 +54,40 @@ rm -rf ./uv-python
 mkdir -p "${UV_PY_CTX}"
 rsync -a "${UV_PY_SRC}/" "${UV_PY_CTX}/"
 
+# ── 准备 hermes 全局只读资源（broker spawn 时软链源）──
+# 必须含：skills/ cache/ pairing/ models_dev_cache.json ollama_cloud_models_cache.json
+# 含认证：auth.json .env config.yaml（这些是敏感配置，生产用 k8s Secret 挂载覆盖，
+#         本地测试时拷入能跑通完整链路）
+HERMES_SRC="${HERMES_HOME_SRC:-/root/.hermes}"
+HERMES_CTX="./hermes"
+
+echo "==> 同步 /root/.hermes 全局只读资源到构建上下文 ${HERMES_CTX}"
+rm -rf "${HERMES_CTX}"
+mkdir -p "${HERMES_CTX}"
+
+# 必须项（broker spawn 必需）
+for item in skills cache pairing models_dev_cache.json ollama_cloud_models_cache.json; do
+    src="${HERMES_SRC}/${item}"
+    if [ -e "$src" ]; then
+        cp -a "$src" "${HERMES_CTX}/"
+    else
+        echo "   跳过（不存在）：$item"
+    fi
+done
+
+# 可选项：密钥/配置（拷贝让本地能跑通；生产用 k8s Secret 挂载覆盖）
+# 设为 HERMES_INCLUDE_SECRETS=0 可跳过（k8s 部署场景）
+if [ "${HERMES_INCLUDE_SECRETS:-1}" = "1" ]; then
+    for item in auth.json .env config.yaml; do
+        src="${HERMES_SRC}/${item}"
+        if [ -e "$src" ]; then
+            cp -a "$src" "${HERMES_CTX}/"
+        fi
+    done
+else
+    echo "   HERMES_INCLUDE_SECRETS=0，跳过 auth.json/.env/config.yaml（生产场景）"
+fi
+
 docker build -f ${DOCKERFILE} --pull . -t ${IMAGE}
 echo "${IMAGE}"
 

@@ -19,6 +19,8 @@ FROM qx-images.tencentcloudcr.com/qunxing/python:3.11-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
         nginx git ca-certificates curl patch \
         procps supervisor vim iputils-ping telnet sqlite3 \
+    # Disable nginx's default site (conflicts with our pod config in conf.d)
+    && rm -f /etc/nginx/sites-enabled/default \
     && rm -rf /var/lib/apt/lists/*
 
 # ── 层2: broker Python 依赖 ──
@@ -29,6 +31,17 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 # venv 含 591 个依赖包，broker spawn 用的 venv/bin/python 由此提供。
 # 不在镜像内重打补丁 —— 补丁已在构建上下文的 agent 源码里应用过。
 COPY hermes-agent /root/.hermes/hermes-agent
+
+# ── 层3.5: broker spawn 必需的全局只读资源（不含密钥）──
+# 这些是 broker _spawn 给用户 hermes_home 软链用的源文件。
+# 密钥(auth.json/.env/config.yaml) 不在此 COPY——生产用 k8s Secret 挂载覆盖，
+# 本地测试场景可临时 COPY 进 build context 验证完整链路。
+# 详见 docs/k8s-base-image-plan.md §2.1 与评审文档支柱 2。
+COPY hermes/skills /root/.hermes/skills
+COPY hermes/cache /root/.hermes/cache
+COPY hermes/pairing /root/.hermes/pairing
+COPY hermes/models_dev_cache.json /root/.hermes/
+COPY hermes/ollama_cloud_models_cache.json /root/.hermes/
 
 # ── 层4: uv python（venv 的解释器）──
 # venv/bin/python 是 symlink → /root/.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/bin/python3.11
@@ -49,6 +62,14 @@ COPY patches /opt/hermes-platform/patches
 COPY scripts /opt/hermes-platform/scripts
 
 # ── 层6: nginx conf + entrypoint ──
+# $connection_upgrade map（WS 升级握手）：必须放在 conf.d（nginx 主配置会 include），
+# 在 http 上下文里 —— conf.d/*.conf 由 nginx.conf 的 http 块 include，所以放在这有效。
+RUN printf '%s\n' \
+        'map $http_upgrade $connection_upgrade {' \
+        '    default upgrade;' \
+        '    ""      close;' \
+        '}' \
+        > /etc/nginx/conf.d/00-map-upgrade.conf
 COPY k8s/nginx-pod.conf /etc/nginx/conf.d/default.conf
 COPY k8s/entrypoint.sh /entrypoint.sh
 

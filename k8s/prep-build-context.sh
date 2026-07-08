@@ -54,6 +54,16 @@ for item in skills cache pairing models_dev_cache.json ollama_cloud_models_cache
   fi
 done
 
+echo "==> 可选：本地测试用密钥（生产由 k8s Secret 挂载）..."
+if [ "${HERMES_INCLUDE_SECRETS:-1}" = "1" ]; then
+  for item in auth.json .env config.yaml; do
+    src="${HERMES_HOME}/${item}"
+    [ -e "$src" ] && cp -a "$src" "$BUILD/hermes-home-base/"
+  done
+else
+  echo "   HERMES_INCLUDE_SECRETS=0 跳过（k8s 部署场景）"
+fi
+
 echo
 echo "==> 完成。体积概览："
 du -sh "$BUILD"/* 2>/dev/null || true

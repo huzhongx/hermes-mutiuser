@@ -23,26 +23,33 @@
 | 内容 | 体积 | 说明 |
 |---|---|---|
 | `hermes-agent/`（含 venv 1.7G + 源码 94M，已打补丁） | 2.7G | agent 运行时本体；剔除 tests/website/node_modules/.git 后含 venv 约 1.8G |
-| `skills/` | 68M | 全局技能（mock-interview、productivity 等） |
-| `bin/` | 68M | agent 二进制/脚本 |
-| `pairing/` | 16K | 配对信息 |
-| `cache/` | 288K | 只读缓存（models_dev_cache 等） |
+| `skills/` | 68M | 全局技能（broker `_spawn` 软链源） |
+| `cache/` | 288K | 只读缓存（models_dev_cache 等），broker `_spawn` 软链源 |
+| `pairing/` | 16K | 配对信息，broker `_spawn` 软链源 |
+| `models_dev_cache.json` / `ollama_cloud_models_cache.json` | 2.3M | 模型元数据缓存，broker `_spawn` 软链源 |
+| `bin/` | 68M | agent 二进制/脚本（运行时可能用） |
 | `hooks/` | 4K | 钩子 |
-| `models_dev_cache.json` / `ollama_cloud_models_cache.json` | 2.3M | 模型元数据缓存 |
-| **合计** | **~2.85G** | |
+| `.skills_prompt_snapshot.json` | 小 | 技能快照 |
+| **合计（最小集）** | **~2.85G** | |
+| **+ bin/ + hooks/（含上更全）** | **~2.99G** | 当前 COPY 范围 |
 
 ### 2.2 ✗不进基础镜像（密钥 / 用户态 / 运行态 / 备份）
 
 | 内容 | 体积 | 不进的原因 / 替代 |
 |---|---|---|
-| `auth.json` | 1.3K | 凭证池 → k8s **Secret** 挂载 |
-| `config.yaml` | 16K | 含密钥/配置 → **ConfigMap**（脱敏后） |
-| `.env` | 18K | 密钥 → **Secret** + `envFrom` |
+| `auth.json` | 1.3K | 凭证池 → k8s **Secret** 挂载覆盖 |
+| `config.yaml` | 16K | 含密钥/配置 → **ConfigMap** 或 Secret 挂载覆盖 |
+| `.env` | 18K | 密钥 → **Secret** + `envFrom` 挂载覆盖 |
 | `state.db` / `state-snapshots/` | 65M+65M | agent 运行态 → PVC（或阶段二迁 PG） |
 | `sessions/` | 123M | 会话历史 → PVC |
 | `workspace/` | 2.1G | 工作区 → PVC |
 | `backup/` | 221M | 备份 → 不进镜像 |
 | `logs/` `cron/` `audio_cache/` `image_cache/` `memories/` `kanban.db` 等 | 小 | 运行态 → PVC |
+
+> **修订记录**：第一次实施（v1 基础镜像方案）只 COPY 了 hermes-agent + uv python，导致 broker `_spawn` 14 秒超时 —— 因为容器内 `/root/.hermes/` 缺少 `skills/cache/pairing/auth.json/config.yaml` 等 broker spawn 必需的内容。修订后按 §2.1 COPY，**且关键发现**：broker spawn 的 `if src.exists()` 检查意味着 `auth.json/config.yaml/.env` **也必须在容器中存在**（否则 spawn 时跳过软链，dashboard 起不来）。  
+> **解决方案**：  
+> - 测试场景：`service.sh` 默认 `HERMES_INCLUDE_SECRETS=1` 拷贝 secrets（与生产一致地能在本地跑通完整链路）。  
+> - 生产场景：设 `HERMES_INCLUDE_SECRETS=0`，k8s 用 Secret/ConfigMap 挂载到 `/root/.hermes/auth.json` 等（**这是 k8s manifests 待补的内容**，详见 §6 决策点）。
 
 ## 3. 三种打包范围（待定）
 
