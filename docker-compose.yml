@@ -22,9 +22,9 @@ services:
   hermes:
     # 镜像来源二选一（用 uncomment 切换）：
     # A. 本地构建的镜像（最简单，CVM 上 build 后直接用）
-    image: hermes-platform:v1
-    # B. 从 TCR 拉（推荐，需先推到腾讯云 TCR 个人版）
-    # image: ccr.ccs.tencentyun.com/${TCR_NAMESPACE}/hermes-platform:v1
+    # image: hermes-platform:v1
+    # B. 从腾讯云 TCR 拉（推荐，需先推到 TCR；走内网极快）
+    image: qx-images.tencentcloudcr.com/qunxing/hermes-platform:v1
     container_name: hermes
     restart: always
 

@@ -209,42 +209,51 @@ step_data_migrate() {
     die "数据未就位，请先手动迁移"
 }
 
-# ─── 步骤 4: 构建镜像 ───
+# ─── 步骤 4: 构建/拉取镜像 ───
 step_build_image() {
-    log "========== 步骤 4: 构建镜像 =========="
+    log "========== 步骤 4: 构建镜像（或从 TCR 拉）=========="
     if is_done step4; then ok "已跳过"; return; fi
 
     cd /opt/hermes-platform
 
     if [ "$DRY_RUN" = "1" ]; then
-        echo -e "${YELLOW}[dry-run]${NC} bash k8s/prep-build-context.sh && docker build ..."
+        echo -e "${YELLOW}[dry-run]${NC} docker pull 或 bash prep-build-context.sh + docker build"
         return
     fi
 
-    # 检查基础镜像（Docker Hub 公开，应可拉取）
-    docker pull python:3.11-slim
-
-    run bash k8s/prep-build-context.sh
-
-    log "构建 hermes-platform:v1 ...（约 2-3 分钟）"
-    if docker build -f docker/Dockerfile -t hermes-platform:v1 . 2>&1 | tee /tmp/build.log | tail -5; then
-        ok "镜像构建成功: $(docker images hermes-platform:v1 --format '{{.Size}}')"
+    # 优先：从 TCR 拉（推荐路径，省 1.7G build context）
+    TCR_IMAGE="qx-images.tencentcloudcr.com/qunxing/hermes-platform:v1"
+    if docker pull "$TCR_IMAGE" 2>&1 | tail -2; then
+        docker tag "$TCR_IMAGE" hermes-platform:v1
+        ok "从 TCR 拉取成功: $TCR_IMAGE"
     else
-        err "构建失败，查看 /tmp/build.log"
-        tail -30 /tmp/build.log
-        die "请修复构建错误后重跑（此步骤会幂等跳过已完成的部分）"
-    fi
+        warn "TCR 拉取失败（可能未登录或仓库不可达），回退到本地构建"
 
-    # 验证 agent 可起
-    if docker run --rm --entrypoint /root/.hermes/hermes-agent/venv/bin/python hermes-platform:v1 \
-        -c 'import hermes_cli.main; print("✓ agent 加载 OK")' 2>&1 | tail -1; then
-        ok "agent 验证通过"
-    else
-        warn "agent 验证失败（不阻塞，可能是 import 警告）"
-    fi
+        # 检查基础镜像（Docker Hub 公开，应可拉取）
+        docker pull python:3.11-slim
 
-    # 清理 build context
-    run rm -rf hermes-agent uv-python hermes
+        run bash k8s/prep-build-context.sh
+
+        log "构建 hermes-platform:v1 ...（约 2-3 分钟）"
+        if docker build -f docker/Dockerfile -t hermes-platform:v1 . 2>&1 | tee /tmp/build.log | tail -5; then
+            ok "镜像构建成功: $(docker images hermes-platform:v1 --format '{{.Size}}')"
+        else
+            err "构建失败，查看 /tmp/build.log"
+            tail -30 /tmp/build.log
+            die "请修复构建错误后重跑（此步骤会幂等跳过已完成的部分）"
+        fi
+
+        # 验证 agent 可起
+        if docker run --rm --entrypoint /root/.hermes/hermes-agent/venv/bin/python hermes-platform:v1 \
+            -c 'import hermes_cli.main; print("✓ agent 加载 OK")' 2>&1 | tail -1; then
+            ok "agent 验证通过"
+        else
+            warn "agent 验证失败（不阻塞，可能是 import 警告）"
+        fi
+
+        # 清理 build context
+        run rm -rf hermes-agent uv-python hermes
+    fi
 
     mark_done step4
 }
