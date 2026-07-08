@@ -36,15 +36,16 @@ services:
       - "8080:80"     # 容器 nginx（HTTP）。改端口避开与宿主机 nginx 冲突。
       # - "443:443"   # 若想让容器直接处理 HTTPS（需挂证书，见 docker-compose 注释）
 
-    # 环境变量：从 .env 文件读取（不要把这些硬编码）
-    env_file:
-      - .env
+    # 环境变量：
+    #   - 必要项直接写在 environment（不依赖外部文件）
+    #   - HERMES_NGINX_DOMAIN 用 ${VAR:-default} 语法，从执行环境的 .env 或 shell 读
+    #     （docker compose 会自动加载执行目录的 .env；文件不存在也不报错）
+    #   - 部署时：cp .env.example .env，编辑 HERMES_NGINX_DOMAIN=你的域名
     environment:
-      # 镜像里 entrypoint / broker 期望的环境（必要项）
       SESSIONS_ROOT: /var/lib/hermes/sessions
       HERMES_HOME: /root/.hermes
       HERMES_PUBLIC_HOST: "127.0.0.1"
-      # HERMES_NGINX_DOMAIN 从 .env 读（部署时填真实域名）
+      HERMES_NGINX_DOMAIN: ${HERMES_NGINX_DOMAIN:-localhost}
 
     # 持久化与密钥挂载
     volumes:
