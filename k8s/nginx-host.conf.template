@@ -1,0 +1,139 @@
+# ──────────────────────────────────────────────────────────────────────────
+# Hermes Platform 宿主机 nginx 配置模板（腾讯云 CVM / 阿里云 ECS）
+#
+# 角色：SSL 终结 + 流量转发到容器内 nginx
+#       容器内 nginx (k8s/nginx-pod.conf) 继续做：
+#         - /broker/*        → broker:8080
+#         - /hermes/ws/{port}/* → 127.0.0.1:{port}（动态端口 + WS Origin 伪造）
+#         - /hermes/dash/{port}/* → 127.0.0.1:{port}
+#         - /hermes/mcp-oauth-cb/{port}/callback → 127.0.0.1:{port}
+#         - /v1/* /api/* (除 broker) → openclaw:3000 / hermes-api:8642
+#
+# 安装位置：/etc/nginx/sites-available/hermes
+# 启用方式：ln -sf ../sites-available/hermes /etc/nginx/sites-enabled/
+#           rm -f /etc/nginx/sites-enabled/default  # 避免冲突
+#
+# SSL 证书路径假设（按 certbot 默认）：
+#   /etc/letsencrypt/live/<YOUR_DOMAIN>/fullchain.pem
+#   /etc/letsencrypt/live/<YOUR_DOMAIN>/privkey.pem
+#
+# ⚠️ 部署前必须替换占位符 <YOUR_DOMAIN>
+# ──────────────────────────────────────────────────────────────────────────
+
+# ── 共享 WebSocket Upgrade 映射（http 上下文）──
+# 需要在 http 块里声明。Debian/Ubuntu nginx.conf 默认 include /etc/nginx/conf.d/*.conf，
+# 所以 map 应放在 conf.d/ 而不是 site conf。运行：
+#   sudo cp /etc/nginx/conf.d/00-upgrade-map.conf.template /etc/nginx/conf.d/00-upgrade-map.conf
+# map 内容见本文件末尾的片段。
+
+# ── 上游（容器内 nginx）──
+# docker compose 把容器端口映射到宿主机，
+# 这里假设容器 nginx 80 → 宿主机 8080（避免与宿主机 nginx 冲突）。
+# 实际部署时改 HERMES_NGINX_UPSTREAM_PORT 匹配你的 docker-compose.yml。
+upstream hermes_container_nginx {
+    server 127.0.0.1:8080;
+    keepalive 32;
+}
+
+# ── HTTP → HTTPS 跳转 ──
+server {
+    listen 80;
+    listen [::]:80;
+    server_name <YOUR_DOMAIN>;
+
+    # 让 certbot http-01 挑战能访问（验证阶段）
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/letsencrypt;
+        default_type "text/plain";
+    }
+
+    # 其余全部 301 → HTTPS
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+# ── HTTPS ──
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name <YOUR_DOMAIN>;
+
+    # ── SSL（certbot 申请/续期后会写到这里）──
+    ssl_certificate     /etc/letsencrypt/live/<YOUR_DOMAIN>/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/<YOUR_DOMAIN>/privkey.pem;
+
+    # ── TLS 调优（参考现网 openclaw.conf）──
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;
+    ssl_prefer_server_ciphers on;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    # ── 安全响应头（与现网一致）──
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+    add_header X-Frame-Options DENY always;
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+    # ── 上传大小（50MB，与 broker 一致）──
+    client_max_body_size 50m;
+    client_body_timeout  300s;
+
+    # ── 全局流量转发到容器内 nginx ──
+    # 容器内 nginx 负责：动态端口路由、WS Origin 伪造、/broker 代理、上传类 endpoint
+    location / {
+        proxy_pass http://hermes_container_nginx;
+        proxy_http_version 1.1;
+
+        # 客户端信息
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host  $host;
+        proxy_set_header X-Forwarded-Port  $server_port;
+
+        # WebSocket 升级握手（关键，否则 WS 客户端连不上 dashboard）
+        proxy_set_header Upgrade           $http_upgrade;
+        proxy_set_header Connection        $connection_upgrade;
+
+        # 缓冲：流式输出实时转发，不缓存
+        proxy_buffering    off;
+        proxy_cache        off;
+        proxy_request_buffering off;
+
+        # 长超时（agent 响应可能慢）
+        proxy_read_timeout  600s;
+        proxy_send_timeout  300s;
+
+        # 透传客户端实际 IP（用于 broker /api/sessions 等的鉴权日志）
+        proxy_set_header X-Original-IP $remote_addr;
+    }
+
+    # ── ACME 挑战（也允许 HTTPS 上直接 renew）──
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/letsencrypt;
+        default_type "text/plain";
+    }
+}
+
+# ──────────────────────────────────────────────────────────────────────────
+# 注意：上述 upstream 只指向容器 nginx（端口 8080，宿主上没冲突）。
+# 容器内 nginx 完整保留我们之前调试通过的动态端口 + WS Origin 逻辑
+# （见 k8s/nginx-pod.conf），宿主机 nginx 不需要重复。
+# ──────────────────────────────────────────────────────────────────────────
+
+# ──────────────────────────────────────────────────────────────────────────
+# 附：$connection_upgrade map 片段（必须放在 http 上下文）
+# 复制以下到 /etc/nginx/conf.d/00-upgrade-map.conf：
+#
+# map $http_upgrade $connection_upgrade {
+#     default upgrade;
+#     ""      close;
+# }
+#
+# （宿主机 nginx 主配置 nginx.conf 已经 include conf.d/*.conf）
+# ──────────────────────────────────────────────────────────────────────────
