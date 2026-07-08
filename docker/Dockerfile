@@ -13,7 +13,10 @@
 # ──────────────────────────────────────────────────────────────────────────
 
 # 基础镜像必须与 venv 的 python 版本一致（venv 是 3.11.15）
-FROM qx-images.tencentcloudcr.com/qunxing/python:3.11-slim
+# 用 Docker Hub 公开镜像（之前用腾讯云私有镜像 qx-images.tencentcloudcr.com/...
+# 现改成 docker.io/library/python:3.11-slim，让代码同时兼容腾讯云/阿里云/本地开发，
+# 不依赖任何私有 registry。Dockerfile 镜像 tag 现统一固定为 3.11-slim）
+FROM python:3.11-slim
 
 # ── 层1: 系统依赖 ──
 RUN apt-get update && apt-get install -y --no-install-recommends \
