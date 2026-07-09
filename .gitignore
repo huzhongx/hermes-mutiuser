@@ -1,8 +1,10 @@
 __pycache__/
 *.pyc
 .env
+.env.bak*
 .jwt_secret
 *.log
 .idea
 .claude
 hermes-agent
+.plan.md
